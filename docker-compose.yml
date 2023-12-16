@@ -1,0 +1,27 @@
+version: "3"
+
+services:
+  channel-clonner:
+    build:
+      context: .
+      dockerfile: docker/bot.dockerfile
+    restart: always
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - postgres
+
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/postgresql.dockerfile
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - channel-clonner-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  channel-clonner-postgres-data:
