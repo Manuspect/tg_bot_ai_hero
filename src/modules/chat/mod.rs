@@ -337,11 +337,9 @@ async fn stream_model_result(
     let estimated_prompt_tokens = openai_client.estimate_prompt_tokens(&msgs);
 
     let mut stream = openai_client.request_chat_model(msgs).await?;
-    // let mut throttled_stream =
-    //     stream.throttle_buffer::<Vec<_>>(Duration::from_millis(config.stream_throttle_interval));
 
     let mut timeout_times = 0;
-    let mut last_response = None;
+    let mut response_content = None;
     loop {
         tokio::select! {
             res = stream.next() => {
@@ -351,12 +349,13 @@ async fn stream_model_result(
                         Ok(response) => {
                             response.choices.iter().for_each(|chat_choice| {
                                 if let Some(ref content) = chat_choice.delta.content {
-                                    last_response = Some(format!("{:#?}{:#?}", last_response.clone().unwrap_or("".to_string()), content));
+                                    log::info!("{}", content);
+                                    response_content = Some(format!("{}{}", response_content.clone().unwrap_or("".to_string()), content));
                                 }
                             });
                         }
                         Err(err) => {
-                            last_response = Some(format!("{}{}", last_response.clone().unwrap_or("".to_string()), err));
+                            response_content = Some(format!("{}{}", response_content.clone().unwrap_or("".to_string()), err));
                         }
                     }
                 } else {
@@ -381,8 +380,8 @@ async fn stream_model_result(
         }
 
         progress_bar.advance_progress();
-        let updated_text = if let Some(last_response) = &last_response {
-            format!("{}\n{}", last_response, progress_bar.current_string())
+        let updated_text = if let Some(response_content) = &response_content {
+            format!("{}\n{}", response_content, progress_bar.current_string())
         } else {
             progress_bar.current_string()
         };
@@ -391,16 +390,17 @@ async fn stream_model_result(
             .edit_message_text(chat_id.to_owned(), editing_msg.id, updated_text)
             .await;
     }
-    log::info!("{:#?}", last_response.clone());
-    // if let Some(mut last_response) = last_response {
-    //     // TODO: OpenAI currently doesn't support to give the token usage
-    //     // in stream mode. Therefore we need to estimate it locally.
-    //     last_response.token_usage =
-    //         openai_client.estimate_tokens(&last_response.content) + estimated_prompt_tokens;
+    log::info!("{:#?}", response_content.clone());
+    if let Some(response_content) = response_content {
+        // TODO: OpenAI currently doesn't support to give the token usage
+        // in stream mode. Therefore we need to estimate it locally.
+        let last_response = ChatModelResult {
+            content: response_content.clone(),
+            token_usage: openai_client.estimate_tokens(&response_content) + estimated_prompt_tokens,
+        };
 
-    //     return Ok(last_response);
-    // }
-
+        return Ok(last_response);
+    }
     Err(anyhow!("Server returned empty response"))
 }
 

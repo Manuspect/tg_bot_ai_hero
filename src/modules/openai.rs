@@ -47,23 +47,9 @@ impl OpenAIClient {
             .max_tokens(self.config.max_tokens.unwrap_or(4096))
             .messages(msgs)
             .build()?;
-        log::info!("{req:#?}");
 
         let stream = client.chat().create_stream(req).await?;
         Ok(stream)
-        // Ok(stream
-        //     .scan(ChatModelResult::default(), |acc, cur| {
-        //         let content = cur
-        //             .as_ref()
-        //             .ok()
-        //             .and_then(|resp| resp.choices.first())
-        //             .and_then(|choice| choice.delta.content.as_ref());
-        //         if let Some(content) = content {
-        //             acc.content.push_str(content);
-        //         }
-        //         future::ready(Some(acc.clone()))
-        //     })
-        //     .boxed())
     }
 
     pub(crate) fn estimate_prompt_tokens(&self, msgs: &Vec<ChatCompletionRequestMessage>) -> u32 {

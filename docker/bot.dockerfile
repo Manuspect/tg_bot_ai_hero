@@ -12,7 +12,9 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     # Add the PostgreSQL client library
-    libpq-dev
+    libpq-dev \
+    sqlite3 ca-certificates \
+    libsqlite3-dev libmysqlclient-dev 
 
 # Install Rust (use a specific version or latest stable)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -30,5 +32,6 @@ VOLUME ["/app/data"]
 # Build your application
 RUN cargo build --release
 
+
 # Set the command to run your application when the docker container starts
-CMD ["./target/release/channel_clonner"]
+CMD ["./target/release/ai_hero"]

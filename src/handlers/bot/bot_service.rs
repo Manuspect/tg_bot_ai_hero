@@ -143,9 +143,7 @@ impl BotService {
 
         let handler = Update::filter_message().branch(
             dptree::filter(
-                |msg: Message,
-                 config: Arc<std::sync::RwLock<env_config::Config>>,
-                 sender: Sender<i64>| {
+                |msg: Message, config: env_config::SharedRwConfig, sender: Sender<i64>| {
                     msg.from().map(|user| true).unwrap_or_default()
                 },
             )
@@ -188,9 +186,7 @@ impl BotService {
 
         let handler = Update::filter_message().branch(
             dptree::filter(
-                |msg: Message,
-                 config: Arc<std::sync::RwLock<env_config::Config>>,
-                 sender: Sender<String>| {
+                |msg: Message, config: env_config::SharedRwConfig, sender: Sender<String>| {
                     msg.from().map(|user| true).unwrap_or_default()
                 },
             )
@@ -255,7 +251,7 @@ impl BotService {
         bot: Arc<Throttle<Bot>>,
         msg: Message,
         cmd: Command,
-        config: Arc<std::sync::RwLock<env_config::Config>>,
+        config: env_config::SharedRwConfig,
         tx_telegram_trusted_user_id: Sender<i64>,
     ) -> ResponseResult<()> {
         // Handle a specific command.
@@ -300,11 +296,20 @@ impl BotService {
         bot: Arc<Throttle<Bot>>,
         msg: Message,
         cmd: Command,
-        config: Arc<std::sync::RwLock<env_config::Config>>,
+        config: env_config::SharedRwConfig,
         tx_telegram_code: Sender<String>,
     ) -> ResponseResult<()> {
         // Check if it is a trusted user.
-        if msg.chat.id != ChatId(config.read().unwrap().tg_trusted_user_id.unwrap_or(0)) {
+        if msg.chat.id
+            != ChatId(
+                config
+                    .get()
+                    .as_ref()
+                    .unwrap()
+                    .tg_trusted_user_id
+                    .unwrap_or(0),
+            )
+        {
             // This user has no rights to interact with the bot.
             bot.send_message(
                 msg.chat.id,
