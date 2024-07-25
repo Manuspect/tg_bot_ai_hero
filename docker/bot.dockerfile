@@ -38,5 +38,6 @@ VOLUME ["/app/data"]
 # Build your application
 RUN cargo build --release
 
+
 # Set the command to run your application when the docker container starts
 CMD ["./target/release/ai_hero"]
