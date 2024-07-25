@@ -9,7 +9,7 @@ use async_openai::types::{
     CreateChatCompletionStreamResponse,
 };
 use async_openai::Client;
-use futures::{future, Stream, StreamExt};
+use futures::Stream;
 use teloxide::dptree::di::{DependencyMap, DependencySupplier};
 
 use crate::{env_config::SharedConfig, module_mgr::Module};
@@ -40,30 +40,16 @@ impl OpenAIClient {
         msgs: Vec<ChatCompletionRequestMessage>,
     ) -> Result<ChatModelStream1, Error> {
         let client = &self.client;
-        log::info!("{msgs:#?}");
+        info!("{msgs:#?}");
         let req = CreateChatCompletionRequestArgs::default()
             .model("gpt-3.5-turbo")
             // .temperature(0.6)
             .max_tokens(self.config.max_tokens.unwrap_or(4096))
             .messages(msgs)
             .build()?;
-        log::info!("{req:#?}");
 
         let stream = client.chat().create_stream(req).await?;
         Ok(stream)
-        // Ok(stream
-        //     .scan(ChatModelResult::default(), |acc, cur| {
-        //         let content = cur
-        //             .as_ref()
-        //             .ok()
-        //             .and_then(|resp| resp.choices.first())
-        //             .and_then(|choice| choice.delta.content.as_ref());
-        //         if let Some(content) = content {
-        //             acc.content.push_str(content);
-        //         }
-        //         future::ready(Some(acc.clone()))
-        //     })
-        //     .boxed())
     }
 
     pub(crate) fn estimate_prompt_tokens(&self, msgs: &Vec<ChatCompletionRequestMessage>) -> u32 {
@@ -83,35 +69,31 @@ impl OpenAIClient {
 
 pub(crate) fn get_msg_content(msg: &ChatCompletionRequestMessage) -> String {
     match msg {
-        ChatCompletionRequestMessage::System(msg) => msg.content.clone().unwrap_or("".to_string()),
-        ChatCompletionRequestMessage::User(msg) => {
-            if let Some(user_message_content) = msg.content.clone() {
-                match user_message_content {
-                    async_openai::types::ChatCompletionRequestUserMessageContent::Text(
-                        content,
-                    ) => content,
-                    async_openai::types::ChatCompletionRequestUserMessageContent::Array(
-                        user_message_content_array,
-                    ) => {
-                        user_message_content_array.into_iter().map(
-                        |user_message_content_part| {
-                            match user_message_content_part {
-                                async_openai::types::ChatCompletionRequestMessageContentPart::Text(content) => {
-                                    content.text
-                                },
-                                async_openai::types::ChatCompletionRequestMessageContentPart::Image(_) => "".to_string(),
-                            }
-                        }).reduce(|acc, s| format!("{acc}{s}")).unwrap_or("".to_string())
-                    }
-                }
-            } else {
-                "".to_string()
-            }
-        }
+        ChatCompletionRequestMessage::System(msg) => msg.content.clone(),
+        ChatCompletionRequestMessage::User(msg) => match msg.content.clone() {
+            async_openai::types::ChatCompletionRequestUserMessageContent::Text(content) => content,
+            async_openai::types::ChatCompletionRequestUserMessageContent::Array(
+                user_message_content_array,
+            ) => user_message_content_array
+                .into_iter()
+                .map(
+                    |user_message_content_part| match user_message_content_part {
+                        async_openai::types::ChatCompletionRequestMessageContentPart::Text(
+                            content,
+                        ) => content.text,
+                        // TODO: implement image part
+                        async_openai::types::ChatCompletionRequestMessageContentPart::ImageUrl(
+                            _,
+                        ) => "{image_here}".to_string(),
+                    },
+                )
+                .reduce(|acc, s| format!("{acc}{s}"))
+                .unwrap_or("".to_string()),
+        },
         ChatCompletionRequestMessage::Assistant(msg) => {
             msg.content.clone().unwrap_or("".to_string())
         }
-        ChatCompletionRequestMessage::Tool(msg) => msg.content.clone().unwrap_or("".to_string()),
+        ChatCompletionRequestMessage::Tool(msg) => msg.content.clone(),
         ChatCompletionRequestMessage::Function(msg) => {
             msg.content.clone().unwrap_or("".to_string())
         }

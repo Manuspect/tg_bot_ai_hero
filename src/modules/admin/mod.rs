@@ -1,6 +1,12 @@
 mod member_mgr;
+mod store;
 
 use std::sync::Arc;
+
+#[cfg(all(feature = "diesel"))]
+pub use store::diesel::DieselMembersStore;
+pub use store::memory::MemoryMembersStore;
+pub use store::UserMembersStore;
 
 use anyhow::Error;
 use teloxide::dptree::di::DependencySupplier;
@@ -44,7 +50,7 @@ macro_rules! check_admin {
                     "You don't have the right to execute admin commands!",
                 )
                 .await;
-            log::warn!(
+            warn!(
                 "Non-admin user \"{}\" tried to execute admin commands",
                 $msg.from()
                     .and_then(|u| u.username.clone())
@@ -83,7 +89,7 @@ async fn set_public(
                 .await?;
         }
         Err(err) => {
-            log::error!("Failed to set public usability: {}", err);
+            error!("Failed to set public usability: {}", err);
             bot.send_message(
                 msg.chat.id,
                 "Failed to set public usability, internal error occurred",
@@ -123,7 +129,7 @@ async fn add_member(
             .await?;
         }
         Err(err) => {
-            log::error!("Failed to add member: {}", err);
+            error!("Failed to add member: {}", err);
             bot.send_message(msg.chat.id, "Failed to add member, internal error occurred")
                 .await?;
         }
@@ -160,7 +166,7 @@ async fn delete_member(
             .await?;
         }
         Err(err) => {
-            log::error!("Failed to delete member: {}", err);
+            error!("Failed to delete member: {}", err);
             bot.send_message(
                 msg.chat.id,
                 "Failed to delete member, internal error occurred",

@@ -1,11 +1,14 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::Error;
+use build_database::build_database::Migrate;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    database::DatabaseManager, env_config::SharedConfig, modules::prefs::PreferencesManager,
+    database::{self, DatabaseManager},
+    env_config::SharedConfig,
+    modules::{config::get_current_time, error::ServiceStartError, prefs::PreferencesManager},
 };
+
+use super::store::MembersBuilder;
 
 const PUBLIC_USABLE_PREF_KEY: &str = "PublicUsable";
 
@@ -32,47 +35,43 @@ impl MemberManager {
         config: SharedConfig,
     ) -> Result<Self, Error> {
         // Initialize the database table before returning.
-        let ok = db_mgr.query(|conn| {
-            let sql = "CREATE TABLE IF NOT EXISTS members (username TEXT NOT NULL PRIMARY KEY, disabled INTEGER, created_at INTEGER NOT NULL);";
-            conn.execute(sql, ()).unwrap();
-            true
-        }).await?;
-        if !ok {
-            return Err(anyhow!("Failed to initialize database table"));
+        match Migrate::run(None) {
+            Ok(_) => Ok(Self {
+                db_mgr,
+                pref_mgr,
+                config,
+            }),
+            Err(e) => Err(anyhow!("Failed to initialize database table {:?}", e)),
         }
-
-        Ok(Self {
-            db_mgr,
-            pref_mgr,
-            config,
-        })
     }
 
     pub async fn add_member(&self, username: String) -> Result<bool, Error> {
-        let unix_timestamp_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
         let result = self
             .db_mgr
             .query(move |conn| {
-                let sql = "INSERT OR IGNORE INTO members VALUES (?, 0, ?);";
-                let mut stmt = conn.prepare(sql).unwrap();
+                let store_factory = database::create_store_factory(conn)
+                    .map_err(|err| {
+                        ServiceStartError::StorageError(format!(
+                            "Failed to initialize store factory: {}",
+                            err
+                        ))
+                    })
+                    .unwrap();
 
-                match stmt.execute((&username, unix_timestamp_secs)) {
-                    Ok(1) => {
-                        log::info!("User \"{}\" is added", username);
-                    }
-                    Ok(_) => {
-                        log::warn!("User \"{}\" had already been added", username)
-                    }
-                    Err(err) => {
-                        log::error!("Failed to insert row: {}", err);
-                        return false;
+                let member = MembersBuilder::new()
+                    .with_username(username.to_string())
+                    .with_disabled(0)
+                    .with_created_at(get_current_time())
+                    .build()
+                    .unwrap();
+
+                match store_factory.get_member_store().add_member(member) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        log::error!("{}", e);
+                        false
                     }
                 }
-
-                true
             })
             .await?;
 
@@ -83,20 +82,18 @@ impl MemberManager {
         let result = self
             .db_mgr
             .query(move |conn| {
-                let sql = "DELETE FROM members WHERE username = ?";
-                let mut stmt = conn.prepare(sql).unwrap();
+                let store_factory = database::create_store_factory(conn)
+                    .map_err(|err| {
+                        ServiceStartError::StorageError(format!(
+                            "Failed to initialize store factory: {}",
+                            err
+                        ))
+                    })
+                    .unwrap();
 
-                match stmt.execute((&username,)) {
-                    Ok(1) => {
-                        log::info!("User \"{}\" is deleted", username);
-                        return true;
-                    }
-                    Ok(_) => {
-                        log::warn!("User \"{}\" is not found", username);
-                    }
-                    Err(err) => {
-                        log::error!("Failed to delete row: {}", err);
-                    }
+                match store_factory.get_member_store().delete_member(&username) {
+                    Ok(_) => return true,
+                    Err(e) => log::error!("{}", e),
                 }
 
                 false
@@ -120,13 +117,25 @@ impl MemberManager {
         let result = self
             .db_mgr
             .query(move |conn| {
-                let sql = "SELECT username, disabled FROM members WHERE username = ?";
-                let disabled_result: Result<bool, _> =
-                    conn.query_row(sql, (&username,), |row| row.get(1));
-
-                match disabled_result {
-                    Ok(disabled) => !disabled,
-                    Err(_) => false,
+                let store_factory = database::create_store_factory(conn)
+                    .map_err(|err| {
+                        ServiceStartError::StorageError(format!(
+                            "Failed to initialize store factory: {}",
+                            err
+                        ))
+                    })
+                    .unwrap();
+                match store_factory.get_member_store().get_member(&username) {
+                    Ok(member) => {
+                        if member.disabled().clone() == 1 {
+                            return false;
+                        }
+                        true
+                    }
+                    Err(e) => {
+                        log::error!("{}", e);
+                        false
+                    }
                 }
             })
             .await?;

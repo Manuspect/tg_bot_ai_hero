@@ -1,5 +1,6 @@
 # Build artifacts.
 /target
+.vscode/
 
 # Environmental variables.
 .env
@@ -8,3 +9,4 @@ config.toml
 # Some private data.
 /data
 /scripts/server_upload.sh
+src/migrations/

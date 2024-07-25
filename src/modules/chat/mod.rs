@@ -13,7 +13,6 @@ use async_openai::types::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
     ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent, Role,
 };
-use futures::StreamExt as FuturesStreamExt;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::di::DependencySupplier;
 use teloxide::prelude::*;
@@ -26,7 +25,6 @@ use crate::{
     modules::openai::{ChatModelResult, OpenAIClient},
     modules::{admin::MemberManager, stats::StatsManager},
     types::HandlerResult,
-    utils::StreamExt,
 };
 use braille::BrailleProgress;
 pub(crate) use session::Session;
@@ -61,15 +59,18 @@ async fn handle_chat_message(
         .and_then(|u| u.username.clone())
         .unwrap_or_default();
     if !member_mgr
-        .is_member_allowed(sender_username)
+        .is_member_allowed(sender_username.clone())
         .await
         .unwrap_or(false)
     {
+        log::info!("{} allowed", sender_username);
         let _ = bot
             .send_message(msg.chat.id, &config.i18n.not_allowed_prompt)
             .reply_to_message_id(msg.id)
             .await;
         return true;
+    } else {
+        log::info!("{} not allowed", sender_username);
     }
 
     let trimmed_text = text.trim_start();
@@ -95,7 +96,7 @@ async fn handle_chat_message(
     )
     .await
     {
-        log::error!("Failed to handle chat message: {}", err);
+        error!("Failed to handle chat message: {}", err);
     }
 
     true
@@ -120,14 +121,14 @@ async fn handle_retry_action(
     let message = message.unwrap();
 
     if let Err(err) = bot.delete_message(message.chat.id, message.id).await {
-        log::error!("Failed to revoke the retry message: {}", err);
+        error!("Failed to revoke the retry message: {}", err);
         return false;
     }
 
     let chat_id = message.chat.id.to_string();
     let last_message = session_mgr.swap_session_pending_message(chat_id.clone(), None);
     if last_message.is_none() {
-        log::error!("Last message not found");
+        error!("Last message not found");
         return true;
     }
     let last_message = last_message.unwrap();
@@ -144,7 +145,7 @@ async fn handle_retry_action(
     )
     .await
     {
-        log::error!("Failed to retry handling chat message: {}", err);
+        error!("Failed to retry handling chat message: {}", err);
     }
 
     true
@@ -209,8 +210,7 @@ async fn actually_handle_chat_message(
     // Construct the request messages.
     let mut msgs = session_mgr.get_history_messages(&chat_id);
     let msg = ChatCompletionRequestUserMessage {
-        content: Some(ChatCompletionRequestUserMessageContent::Text(content)),
-        role: Role::User,
+        content: ChatCompletionRequestUserMessageContent::Text(content),
         name: None,
     };
     let user_msg = ChatCompletionRequestMessage::User(msg);
@@ -233,7 +233,6 @@ async fn actually_handle_chat_message(
             let reply_history_message = session_mgr.with_mut_session(chat_id.clone(), |session| {
                 let msg = ChatCompletionRequestAssistantMessage {
                     content: Some(res.content.clone()),
-                    role: Role::Assistant,
                     name: None,
                     tool_calls: None,
                     function_call: None,
@@ -245,10 +244,9 @@ async fn actually_handle_chat_message(
                 let parsed_content = markdown::parse(&res.content);
                 #[cfg(debug_assertions)]
                 {
-                    log::debug!(
+                    debug!(
                         "rendered Markdown contents: {}\ninto: {:#?}",
-                        res.content,
-                        parsed_content
+                        res.content, parsed_content
                     );
                 }
                 let mut edit_message_text = bot.edit_message_text(
@@ -268,7 +266,7 @@ async fn actually_handle_chat_message(
                 if let Err(first_trial_err) = edit_message_text.await {
                     // TODO: test if the error is related to Markdown before
                     // fallback to raw contents.
-                    log::error!(
+                    error!(
                         "failed to send message (will fallback to raw contents): {}",
                         first_trial_err
                     );
@@ -301,13 +299,13 @@ async fn actually_handle_chat_message(
                     .add_usage(from_username.to_owned(), res.token_usage as _)
                     .await;
                 if let Err(err) = res {
-                    log::error!("Failed to update stats: {}", err);
+                    error!("Failed to update stats: {}", err);
                 }
             }
             Ok(())
         }
         Err(err) => {
-            log::error!("Failed to request the model: {}", err);
+            error!("Failed to request the model: {}", err);
             session_mgr.swap_session_pending_message(chat_id.clone(), Some(user_msg));
             let retry_button = InlineKeyboardButton::callback("Retry", "/retry");
             let reply_markup = InlineKeyboardMarkup::default().append_row([retry_button]);
@@ -319,11 +317,15 @@ async fn actually_handle_chat_message(
     };
 
     if let Err(err) = reply_result {
-        log::error!("Failed to edit the final message: {}", err);
+        error!("Failed to edit the final message: {}", err);
     }
 
     Ok(())
 }
+
+use async_std::io;
+use async_std::prelude::*;
+use std::time::Instant;
 
 async fn stream_model_result(
     bot: &Bot,
@@ -335,39 +337,54 @@ async fn stream_model_result(
     config: &SharedConfig,
 ) -> Result<ChatModelResult, Error> {
     let estimated_prompt_tokens = openai_client.estimate_prompt_tokens(&msgs);
-
+    log::info!("{:?}", msgs);
     let mut stream = openai_client.request_chat_model(msgs).await?;
-    // let mut throttled_stream =
-    //     stream.throttle_buffer::<Vec<_>>(Duration::from_millis(config.stream_throttle_interval));
+    let mut lock = io::stdout();
 
     let mut timeout_times = 0;
-    let mut last_response = None;
+    let mut antispam_start_time = Instant::now();
+    let mut response_content = String::new();
     loop {
         tokio::select! {
             res = stream.next() => {
-                log::info!("{:#?}", res);
+                // info!("{:#?}", res);
                 if let Some(res) = res {
+                    // let mut temp_logs: String = String::new();
                     match res {
                         Ok(response) => {
-                            response.choices.iter().for_each(|chat_choice| {
+                            for chat_choice in &response.choices {
                                 if let Some(ref content) = chat_choice.delta.content {
-                                    last_response = Some(format!("{:#?}{:#?}", last_response.clone().unwrap_or("".to_string()), content));
+                                    response_content.push_str(content);
+                                    lock.write(content.as_bytes()).await?;
+                                    lock.flush().await?;
                                 }
-                            });
+                                let elapsed_time = antispam_start_time.elapsed();
+                                if elapsed_time >= Duration::from_secs(config.tg_edit_message_timeout) {
+                                    progress_bar.advance_progress();
+
+                                    let updated_text = format!("{}\n{}", response_content, progress_bar.current_string());
+                                    let res = bot
+                                        .edit_message_text(chat_id.to_owned(), editing_msg.id, updated_text)
+                                        .await;
+                                    match res {
+                                        Ok(_) => {},
+                                        Err(res) => {
+                                            error!("Failed to edit the progress message: {}", res);
+                                        }
+                                    };
+
+                                    // Reset antispam_start_time
+                                    antispam_start_time = Instant::now();
+                                }
+                            }
                         }
                         Err(err) => {
-                            last_response = Some(format!("{}{}", last_response.clone().unwrap_or("".to_string()), err));
+                            response_content.push_str(&err.to_string());
                         }
                     }
                 } else {
                     break
                 }
-
-
-                // // Since the stream item is scanned (accumulated), we only
-                // // need to get the last item in the buffer and use it as
-                // // the latest message content.
-                // last_response = res.as_ref().unwrap().last().cloned();
 
                 // Reset the timeout once the stream is resumed.
                 timeout_times = 0;
@@ -379,28 +396,18 @@ async fn stream_model_result(
                 }
             }
         }
-
-        progress_bar.advance_progress();
-        let updated_text = if let Some(last_response) = &last_response {
-            format!("{}\n{}", last_response, progress_bar.current_string())
-        } else {
-            progress_bar.current_string()
+    }
+    info!("{:#?}", response_content.clone());
+    if !response_content.is_empty() {
+        // TODO: OpenAI currently doesn't support to give the token usage
+        // in stream mode. Therefore we need to estimate it locally.
+        let last_response = ChatModelResult {
+            content: response_content.clone(),
+            token_usage: openai_client.estimate_tokens(&response_content) + estimated_prompt_tokens,
         };
 
-        let _ = bot
-            .edit_message_text(chat_id.to_owned(), editing_msg.id, updated_text)
-            .await;
+        return Ok(last_response);
     }
-    log::info!("{:#?}", last_response.clone());
-    // if let Some(mut last_response) = last_response {
-    //     // TODO: OpenAI currently doesn't support to give the token usage
-    //     // in stream mode. Therefore we need to estimate it locally.
-    //     last_response.token_usage =
-    //         openai_client.estimate_tokens(&last_response.content) + estimated_prompt_tokens;
-
-    //     return Ok(last_response);
-    // }
-
     Err(anyhow!("Server returned empty response"))
 }
 

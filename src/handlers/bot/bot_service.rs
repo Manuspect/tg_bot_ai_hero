@@ -89,7 +89,7 @@ pub async fn get_trusted_chat_id(tg_client: &Client, config: env_config::SharedR
             //     })
             // };
 
-            log::info!("Wait for trusted_user_id");
+            info!("Wait for trusted_user_id");
             // Wait for a user that enter correct service password.
             let chat_id: i64 = rx_telegram_trusted_user_id.recv().await.unwrap();
             {
@@ -98,17 +98,17 @@ pub async fn get_trusted_chat_id(tg_client: &Client, config: env_config::SharedR
                 let _res = bot_shutdown_token.shutdown();
                 // let _res = shutdown_tx.send(()).unwrap_or_else(|err| {
                 //     // Makes the second Ctrl-C exit instantly
-                //     log::info!("{:#?}", err);
+                //     info!("{:#?}", err);
                 //     0
                 //     // std::process::exit(0);
                 // });
             }
-            log::info!("Wait for shutdown of bot_for_trusted_id");
+            info!("Wait for shutdown of bot_for_trusted_id");
 
             if let Err(err) = tokio::try_join!(bot_handle) {
                 panic!("{err}")
             }
-            log::info!("Bot_for_trusted_id shutdown");
+            info!("Bot_for_trusted_id shutdown");
             chat_id
         }
     }
@@ -143,9 +143,7 @@ impl BotService {
 
         let handler = Update::filter_message().branch(
             dptree::filter(
-                |msg: Message,
-                 config: Arc<std::sync::RwLock<env_config::Config>>,
-                 sender: Sender<i64>| {
+                |msg: Message, config: env_config::SharedRwConfig, sender: Sender<i64>| {
                     msg.from().map(|user| true).unwrap_or_default()
                 },
             )
@@ -188,9 +186,7 @@ impl BotService {
 
         let handler = Update::filter_message().branch(
             dptree::filter(
-                |msg: Message,
-                 config: Arc<std::sync::RwLock<env_config::Config>>,
-                 sender: Sender<String>| {
+                |msg: Message, config: env_config::SharedRwConfig, sender: Sender<String>| {
                     msg.from().map(|user| true).unwrap_or_default()
                 },
             )
@@ -255,7 +251,7 @@ impl BotService {
         bot: Arc<Throttle<Bot>>,
         msg: Message,
         cmd: Command,
-        config: Arc<std::sync::RwLock<env_config::Config>>,
+        config: env_config::SharedRwConfig,
         tx_telegram_trusted_user_id: Sender<i64>,
     ) -> ResponseResult<()> {
         // Handle a specific command.
@@ -300,11 +296,20 @@ impl BotService {
         bot: Arc<Throttle<Bot>>,
         msg: Message,
         cmd: Command,
-        config: Arc<std::sync::RwLock<env_config::Config>>,
+        config: env_config::SharedRwConfig,
         tx_telegram_code: Sender<String>,
     ) -> ResponseResult<()> {
         // Check if it is a trusted user.
-        if msg.chat.id != ChatId(config.read().unwrap().tg_trusted_user_id.unwrap_or(0)) {
+        if msg.chat.id
+            != ChatId(
+                config
+                    .get()
+                    .as_ref()
+                    .unwrap()
+                    .tg_trusted_user_id
+                    .unwrap_or(0),
+            )
+        {
             // This user has no rights to interact with the bot.
             bot.send_message(
                 msg.chat.id,

@@ -1,4 +1,10 @@
 mod prefs_mgr;
+mod store;
+
+#[cfg(all(feature = "diesel"))]
+pub use store::diesel::DieselPreferencesStore;
+pub use store::memory::MemoryPreferencesStore;
+pub use store::UserPreferencesStore;
 
 use anyhow::Error;
 use teloxide::prelude::*;

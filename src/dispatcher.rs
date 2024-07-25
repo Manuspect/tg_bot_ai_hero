@@ -64,20 +64,21 @@ async fn message_filter(me: Me, msg: Message) -> bool {
     }
 
     if let Some(text) = msg.text() {
-        log::debug!("{} sent a message: {}", from, text);
+        debug!("{} sent a message: {}", from, text);
     } else {
-        log::debug!("{} sent a message: {:#?}", from, msg.kind);
+        debug!("{} sent a message: {:#?}", from, msg.kind);
     }
 
     false
 }
 
 async fn default_handler(upd: Update) -> HandlerResult {
-    log::warn!("Update ({}) is not handled!", upd.id);
+    warn!("Update ({}) is not handled!", upd.id);
     Ok(())
 }
 
 pub(crate) async fn noop_handler() -> HandlerResult {
+    info!("noop_handler event");
     Ok(())
 }
 

@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS token_usage (
+  user_id TEXT NOT NULL, 
+  time TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, 
+  tokens BigInt NOT NULL, 
+  PRIMARY KEY (user_id, time)
+);

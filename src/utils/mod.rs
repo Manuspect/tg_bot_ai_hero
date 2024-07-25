@@ -1,7 +1,7 @@
 #![doc(hidden)]
 
 pub mod app_error;
-pub mod database_service;
+// pub mod database_service;
 pub mod sign_in_tg;
 pub mod types_and_constants;
 

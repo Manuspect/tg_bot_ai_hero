@@ -1,0 +1,25 @@
+
+
+syntax = "proto3";
+
+message Proposal {
+  // The proposal’s identifier, which is a hash of `previous_id`,
+  // `proposal_height`, and `summary`
+  bytes id = 1;
+  // The identifier of the proposal’s immediate predecessor
+  bytes previous_id = 2;
+  // The number of proposals preceding this one (used for ordering
+  // purposes)
+  uint64 proposal_height = 3;
+  // A summary of the data this proposal represents
+  bytes summary = 4;
+  // Opaque data that is provided by the consensus algorithm
+  bytes consensus_data = 5;
+}
+
+message ConsensusMessage {
+  // An opaque message that is interpreted by the consensus algorithm
+  bytes message = 1;
+  // ID of the service that created this message
+  bytes origin_id = 2;
+}

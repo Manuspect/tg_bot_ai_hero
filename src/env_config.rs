@@ -44,11 +44,7 @@ pub struct Config {
     pub tg_trusted_user_id: Option<i64>,
     pub tg_copy_channel_name: String,
     pub tg_paste_channel_name: String,
-    pub postgres_user: String,
-    pub postgres_password: SecretString,
-    pub postgres_db: String,
-    pub database_url: String,
-
+    // pub database_url: String,
     /// The API key of your OpenAI account.
     /// JSON key: `openaiAPIKey`
     pub openai_api_key: String,
@@ -57,6 +53,11 @@ pub struct Config {
     /// JSON key: `openaiAPITimeout`
     #[serde(default = "default_openai_api_timeout")]
     pub openai_api_timeout: u64,
+
+    /// A timeout in seconds for telegram chat message edit.
+    /// JSON key: `openaiAPITimeout`
+    #[serde(default = "default_tg_edit_message_timeout")]
+    pub tg_edit_message_timeout: u64,
 
     /// A set of usernames that represents the admin users, who can use
     /// admin commands. You must specify this field to use admin features.
@@ -102,10 +103,10 @@ pub fn read_config() -> Config {
     dotenv().ok();
     env::var(CONFIG_PATH_ENV)
         .map_err(|_| format!("{CONFIG_PATH_ENV} environment variable not set"))
-        .and_then(|config_path| std::fs::read(config_path).map_err(|e| e.to_string()))
-        .and_then(|bytes| toml::from_slice(&bytes).map_err(|e| e.to_string()))
+        .and_then(|config_path| std::fs::read_to_string(config_path).map_err(|e| e.to_string()))
+        .and_then(|contents| toml::from_str(&contents).map_err(|e| e.to_string()))
         .unwrap_or_else(|err| {
-            log::error!("failed to read config: {err}");
+            error!("failed to read config: {err}");
             std::process::exit(1);
         })
 }
@@ -210,6 +211,7 @@ macro_rules! define_defaults {
 
 define_defaults! {
     openai_api_timeout: u64 = 10,
+    tg_edit_message_timeout: u64 = 2,
     stream_throttle_interval: u64 = 500,
     conversation_limit: u64 = 20,
     renders_markdown: bool = false,

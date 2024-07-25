@@ -15,7 +15,9 @@ use crate::{
     dispatcher::build_dispatcher,
     env_config::{Config, SharedConfig},
     module_mgr::ModuleManager,
-    modules::{admin::Admin, chat::Chat, openai::OpenAI, prefs::Prefs, stats::Stats},
+    modules::{
+        admin::Admin, chat::Chat, openai::OpenAI, parser::Parser, prefs::Prefs, stats::Stats,
+    },
     types::HandlerResult,
 };
 
@@ -44,28 +46,30 @@ async fn init_bot(config: &Config, module_mgr: &mut ModuleManager) -> Result<Bot
 /// Starts bot server and blocks the caller until the bot is requested
 /// to shutdown.
 pub async fn run(config: SharedConfig) {
-    log::debug!("Initializing database...");
+    debug!("Initializing database...");
     let db_mgr = if let Some(database_path) = &config.database_path {
         DatabaseManager::with_db_provider(FileDatabaseProvider::new(database_path))
     } else {
-        DatabaseManager::with_db_provider(InMemDatabaseProvider)
+        DatabaseManager::with_db_provider(InMemDatabaseProvider::new("memory"))
     }
     .unwrap();
 
-    log::debug!("Initializing modules...");
+    debug!("Initializing modules...");
     let mut module_mgr = ModuleManager::new();
     module_mgr.register_module(crate::modules::config::Config::new(config.clone()));
     module_mgr.register_module(OpenAI);
+    // module_mgr.register_module(Biome);
     module_mgr.register_module(Prefs::new(db_mgr.clone()));
     module_mgr.register_module(Admin::new(db_mgr.clone()));
     module_mgr.register_module(Stats::new(db_mgr.clone()));
     module_mgr.register_module(Chat);
+    module_mgr.register_module(Parser::new(db_mgr.clone()));
 
-    log::info!("Initializing bot...");
+    info!("Initializing bot...");
     let bot = match init_bot(&config, &mut module_mgr).await {
         Ok(bot) => bot,
         Err(err) => {
-            log::error!("Failed to init bot: {}", err);
+            error!("Failed to init bot: {}", err);
             return;
         }
     };
@@ -73,10 +77,10 @@ pub async fn run(config: SharedConfig) {
     let mut built_dispatcher = match build_dispatcher(bot, module_mgr).await {
         Ok(dispatcher) => dispatcher,
         Err(err) => {
-            log::error!("Failed to init dispatcher: {}", err);
+            error!("Failed to init dispatcher: {}", err);
             return;
         }
     };
-    log::info!("Bot is started!");
+    info!("Bot is started!");
     built_dispatcher.dispatch().await;
 }

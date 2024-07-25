@@ -1,0 +1,33 @@
+
+
+syntax = "proto3";
+
+message NetworkMessage {
+    // The message type for the payload
+    NetworkMessageType message_type = 1;
+
+    // either a message defined below or another message envelope
+    bytes payload = 2;
+}
+
+enum NetworkMessageType {
+    UNSET_NETWORK_MESSAGE_TYPE = 0;
+
+    // Network Message
+    NETWORK_ECHO = 1;
+    NETWORK_HEARTBEAT = 2;
+
+    // Message types that indicate that the payload is another message envelope
+    CIRCUIT = 100;
+    AUTHORIZATION = 101 ;
+}
+
+// This message is used for debugging
+message NetworkEcho {
+    bytes payload = 1;
+    string recipient = 2;
+    int32 time_to_live = 3;
+}
+
+// This message is used to keep connections alive
+message NetworkHeartbeat {}

@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
 use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event as CmarkEvent, Options as CmarkOptions, Parser as CmarkParser,
-    Tag as CmarkTag,
+    CodeBlockKind, CowStr, Event as CmarkEvent, HeadingLevel, Options as CmarkOptions,
+    Parser as CmarkParser, Tag as CmarkTag,
 };
 use teloxide::types::{MessageEntity, MessageEntityKind};
 
@@ -43,13 +43,22 @@ enum Tag<'a> {
     Image(CowStr<'a>),
 }
 
-impl<'a> TryFrom<CmarkTag<'a>> for Tag<'a> {
+impl<'a> TryFrom<CmarkTag<'a>> for Tag<'a>
+where
+    Self: 'a,
+{
     type Error = ParserError<'a>;
 
     fn try_from(value: CmarkTag<'a>) -> Result<Self, Self::Error> {
         let mapped = match value {
-            CmarkTag::Paragraph | CmarkTag::BlockQuote => Tag::Paragraph,
-            CmarkTag::Heading(level, _, _) => Tag::Heading(level as _),
+            CmarkTag::Paragraph => Tag::Paragraph,
+            CmarkTag::BlockQuote(_) => Tag::Paragraph,
+            CmarkTag::Heading {
+                level,
+                id,
+                classes,
+                attrs,
+            } => Tag::Heading(level as _),
             CmarkTag::CodeBlock(code_block_kind) => match code_block_kind {
                 CodeBlockKind::Indented => Tag::CodeBlock(None),
                 CodeBlockKind::Fenced(lang) => Tag::CodeBlock(Some(lang)),
@@ -59,8 +68,18 @@ impl<'a> TryFrom<CmarkTag<'a>> for Tag<'a> {
             CmarkTag::Emphasis => Tag::Italic,
             CmarkTag::Strong => Tag::Bold,
             CmarkTag::Strikethrough => Tag::Strikethrough,
-            CmarkTag::Link(_, url, _) => Tag::Link(url),
-            CmarkTag::Image(_, url, _) => Tag::Image(url),
+            CmarkTag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            } => Tag::Link(dest_url),
+            CmarkTag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            } => Tag::Image(dest_url),
             _ => return Err(ParserError::UnexpectedCmarkTag(value)),
         };
         Ok(mapped)
@@ -81,6 +100,26 @@ impl<'a> TryFrom<CmarkEvent<'a>> for Event<'a> {
             _ => {
                 return Err(ParserError::UnexpectedCmarkEvent(value));
             }
+        };
+        Ok(mapped)
+    }
+}
+
+impl<'a> TryFrom<pulldown_cmark::TagEnd> for Tag<'a> {
+    type Error = ParserError<'a>;
+
+    fn try_from(value: pulldown_cmark::TagEnd) -> Result<Self, Self::Error> {
+        let mapped = match value {
+            pulldown_cmark::TagEnd::Paragraph => Tag::Paragraph,
+            pulldown_cmark::TagEnd::BlockQuote => Tag::Paragraph,
+            pulldown_cmark::TagEnd::Heading(level) => Tag::Heading(level as _),
+            pulldown_cmark::TagEnd::CodeBlock => Tag::CodeBlock(None),
+            pulldown_cmark::TagEnd::List(first) => Tag::List(None),
+            pulldown_cmark::TagEnd::Item => Tag::Item,
+            pulldown_cmark::TagEnd::Emphasis => Tag::Italic,
+            pulldown_cmark::TagEnd::Strong => Tag::Bold,
+            pulldown_cmark::TagEnd::Strikethrough => Tag::Strikethrough,
+            _ => return Err(ParserError::UnexpectedEndTag(value)),
         };
         Ok(mapped)
     }
@@ -132,6 +171,7 @@ const LIST_ITEM_MARGIN: usize = 1;
 enum ParserError<'input> {
     /// Cannot convert the Cmark tag to our tag.
     UnexpectedCmarkTag(CmarkTag<'input>),
+    UnexpectedEndTag(pulldown_cmark::TagEnd),
     /// Cannot handle the Cmark event.
     UnexpectedCmarkEvent(CmarkEvent<'input>),
     /// Cannot parse the given URL string.
@@ -374,7 +414,7 @@ pub fn parse(content: &str) -> ParsedString {
     match result {
         Ok(state) => state.close(),
         Err(err) => {
-            log::error!("Error while parsing Markdown: {:?}", err);
+            error!("Error while parsing Markdown: {:?}", err);
             ParsedString::with_str(content)
         }
     }

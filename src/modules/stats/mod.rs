@@ -1,4 +1,10 @@
 mod stats_mgr;
+mod store;
+
+#[cfg(all(feature = "diesel"))]
+pub use store::diesel::DieselTokenUsageStore;
+pub use store::memory::MemoryTokenUsageStore;
+pub use store::UserTokenUsageStore;
 
 use std::fmt::Write;
 

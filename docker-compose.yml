@@ -1,7 +1,7 @@
 version: "3"
 
 services:
-  channel-clonner:
+  ai-hero:
     build:
       context: .
       dockerfile: docker/bot.dockerfile
@@ -19,9 +19,9 @@ services:
     env_file:
       - .env
     volumes:
-      - channel-clonner-postgres-data:/var/lib/postgresql/data
+      - ai-hero-postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
 
 volumes:
-  channel-clonner-postgres-data:
+  ai-hero-postgres-data:

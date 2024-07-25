@@ -1,0 +1,24 @@
+
+
+syntax = "proto3";
+
+// The component message envelope.  All message sent to local components will
+// be wrapped in one of these.
+message ComponentMessage {
+    // The type of component message
+    ComponentMessageType message_type = 1;
+
+    // The envelope contents.
+    bytes payload = 2;
+}
+
+enum ComponentMessageType  {
+    UNSET_COMPONENT_MESSAGE_TYPE = 0;
+    // Mimics the NETWORK_HEARTBEAT
+    COMPONENT_HEARTBEAT = 2;
+
+    SERVICE = 100;
+}
+
+// This message is used to keep connections alive
+message ComponentHeartbeat {}

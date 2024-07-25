@@ -1,0 +1,182 @@
+
+
+syntax = "proto3";
+
+
+// The enumerated types of authorization messages.
+enum AuthorizationMessageType {
+    UNSET_AUTHORIZATION_MESSAGE_TYPE = 0;
+
+    // Begin a Connection.
+    CONNECT_REQUEST = 1;
+    CONNECT_RESPONSE = 2;
+
+    // Authorize a peer.
+    AUTHORIZE = 3;
+
+    // Authorization failure.
+    AUTHORIZATION_ERROR = 4;
+
+    // Trust.
+    TRUST_REQUEST = 10;
+
+
+    // Start of v1 messages
+    AUTH_COMPLETE = 100;
+    AUTH_PROTOCOL_REQUEST = 101;
+    AUTH_PROTOCOL_RESPONSE = 102;
+
+    // v1 Trust authorization
+    AUTH_TRUST_REQUEST = 110;
+    AUTH_TRUST_RESPONSE = 111;
+
+    // Challenge Authorization
+    AUTH_CHALLENGE_NONCE_REQUEST = 120;
+    AUTH_CHALLENGE_NONCE_RESPONSE = 121;
+    AUTH_CHALLENGE_SUBMIT_REQUEST = 122;
+    AUTH_CHALLENGE_SUBMIT_RESPONSE = 123;
+}
+
+// The authorization message envelope.
+message AuthorizationMessage {
+    // The type of message.
+    AuthorizationMessageType message_type = 1;
+
+    // the payload.
+    bytes payload = 2;
+}
+
+// A connection request message.
+//
+// This message provides information from the incoming connection.
+message ConnectRequest {
+    enum HandshakeMode {
+        UNSET_HANDSHAKE_MODE = 0;
+        UNIDIRECTIONAL = 1;
+        BIDIRECTIONAL = 2;
+    }
+
+    HandshakeMode handshake_mode = 1;
+}
+
+// A connection response message.
+//
+// This message provides information for the incoming peer regarding the types
+// of authorization accepted.
+message ConnectResponse {
+    enum AuthorizationType {
+        UNSET_AUTHORIZATION_TYPE = 0;
+        TRUST = 1;
+    }
+
+    // A list of available authorization types accepted by the sending node.
+    repeated AuthorizationType accepted_authorization_types = 1;
+}
+
+// A trust request.
+//
+// A trust request is sent in response to a Connect Message, if the node is using trust
+// authentication as its means of allowing a node to connect.
+message TrustRequest {
+    // The requesting node's identity.
+    string identity = 1;
+}
+
+// A successful authorization message.
+//
+// This message is returned after either a TrustResponse or a ChallengeResponse has been returned
+// by the connecting node.
+message AuthorizedMessage {
+}
+
+// A message indicating an error in authorization.
+//
+// This includes failed authorizations, or invalid messages during the authorization
+// handshake conversation.
+message AuthorizationError {
+    enum AuthorizationErrorType {
+        UNSET_AUTHORIZATION_ERROR_TYPE = 0;
+
+        AUTHORIZATION_REJECTED = 1;
+    }
+
+    // The type of error.
+    AuthorizationErrorType error_type = 1;
+
+    // The error details.
+    string error_message = 2;
+}
+
+// ------------- v1 Messages ------------------
+
+// Authorization protocol agreement request message
+//
+// This message will allow for the two connecting nodes to agree on what
+// authorization protocol version will be used
+message AuthProtocolRequest {
+    uint32 auth_protocol_min = 1;
+    uint32 auth_protocol_max = 2;
+}
+
+// Authorization protocol agreement response message
+//
+// Contains the agreed upon protocol version and the list of supported
+// authorization types
+message AuthProtocolResponse {
+    enum PeerAuthorizationType {
+        UNSET_AUTHORIZATION_TYPE = 0;
+        TRUST = 1;
+        CHALLENGE = 2;
+    }
+    uint32 auth_protocol = 1;
+    repeated PeerAuthorizationType accepted_authorization_type = 2;
+}
+
+// v1 Trust request
+//
+// Contains the identity of the connecting node
+message AuthTrustRequest {
+    string identity = 1;
+}
+
+// v1 Trust response
+//
+// Returned if the identity was accepted
+message AuthTrustResponse{}
+
+// Challenge nonce requests
+//
+// Sent to a node to request a nonce that can be used for challenge
+// authorization
+message AuthChallengeNonceRequest{}
+
+// Challenge nonce response
+//
+// Returns the nonce that must be signed by the requesting node to prove
+// their identity
+message AuthChallengeNonceResponse {
+    bytes nonce = 1;
+}
+
+message SubmitRequest {
+    bytes public_key = 1;
+    bytes signature = 2;
+}
+
+// Challenge submit requests
+//
+// The connecting nodes public keys and the signatures created by signing the
+// nonce received from the nonce response
+message AuthChallengeSubmitRequest {
+    repeated SubmitRequest submit_requests = 1;
+}
+
+// v1 challenge response
+//
+// Returned if the signature and public key are valid
+message AuthChallengeSubmitResponse {
+    bytes public_key = 1;
+}
+
+// Returned if authorization is complete
+message AuthComplete {}

@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS members (
+  username TEXT NOT NULL PRIMARY KEY, 
+  disabled INTEGER NOT NULL, 
+  created_at TIMESTAMP NOT NULL
+);
