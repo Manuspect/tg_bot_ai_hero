@@ -42,7 +42,7 @@ impl OpenAIClient {
         let client = &self.client;
         info!("{msgs:#?}");
         let req = CreateChatCompletionRequestArgs::default()
-            .model("gpt-3.5-turbo")
+            .model("gpt-4o")
             // .temperature(0.6)
             .max_tokens(self.config.max_tokens.unwrap_or(4096))
             .messages(msgs)

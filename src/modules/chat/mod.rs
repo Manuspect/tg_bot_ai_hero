@@ -5,18 +5,25 @@ mod markdown;
 mod session;
 mod session_mgr;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Error;
 use async_openai::types::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
-    ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent, Role,
+    ChatCompletionRequestMessageContentPart, ChatCompletionRequestMessageContentPartImage,
+    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestUserMessageContent, ImageDetail, ImageUrl, Role,
 };
+use base64::Engine;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::di::DependencySupplier;
+use teloxide::net::Download;
 use teloxide::prelude::*;
+use teloxide::types::File as TgFile;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Me};
+use tokio::fs::File;
 
 use crate::{
     dispatcher::noop_handler,
@@ -46,7 +53,55 @@ async fn handle_chat_message(
     openai_client: OpenAIClient,
     config: SharedConfig,
 ) -> bool {
-    let mut text = msg.text().map_or(Default::default(), |t| t.to_owned());
+    let mut text = msg.text().map_or(Default::default(), |t| t.to_owned());    
+     
+    // Image handling
+    let img = msg.photo().map_or(Default::default(), |t| t.to_owned());
+    log::info!("img len: {}", img.len());
+    let mut url_image = None;
+    if let Some(last_photo) = img.last() {
+        log::info!("Da1");
+        match bot.get_file(last_photo.file.id.clone()).send().await {
+            Ok(TgFile { meta, path }) => {
+                log::info!("Da2");
+                // let file_r = File::create(format!("./data/images/{}.png", meta.unique_id)).await;
+                // match file_r {
+                //     Ok(mut file) => {
+                //         log::info!("Da3");
+                //         match bot.download_file(&path, &mut file).await {
+                //             Ok(_) => {
+                //                 log::info!("Downloading File: {} | Size: {} ...", path, meta.size)
+                //             }
+                //             Err(err) => log::warn!("{}", err),
+                //         }
+                //     }
+                //     Err(err) => log::warn!("{}", err),
+                // }
+                let mut buffer: Vec<u8> = Vec::new();
+                match bot.download_file(&path, &mut buffer).await {
+                    Ok(_) => {
+                        log::info!("Downloading File: {} | Size: {} ...", path, meta.size);
+                        // Determine the MIME type based on the extension
+                        let mime_type =
+                            match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
+                                Some("jpg") | Some("jpeg") => "image/jpeg",
+                                Some("png") => "image/png",
+                                Some("gif") => "image/gif",
+                                Some("bmp") => "image/bmp",
+                                _ => "application/octet-stream",
+                            };
+                        let encoded_image =
+                            base64::engine::general_purpose::STANDARD.encode(&buffer);
+                        url_image = Some(format!("data:{};base64,{}", mime_type, encoded_image));
+                    }
+                    Err(err) => log::warn!("{}", err),
+                }
+            }
+            Err(err) => log::warn!("{}", err),
+        }
+    }
+    log::info!("Da4");
+
     let chat_id = chat_id.to_string();
 
     if text.starts_with('/') {
@@ -87,7 +142,8 @@ async fn handle_chat_message(
     if let Err(err) = actually_handle_chat_message(
         bot,
         Some(msg),
-        text,
+        Some(text),
+        url_image,
         chat_id,
         session_mgr,
         stats_mgr,
@@ -132,21 +188,21 @@ async fn handle_retry_action(
         return true;
     }
     let last_message = last_message.unwrap();
-
-    if let Err(err) = actually_handle_chat_message(
-        bot,
-        None,
-        get_msg_content(&last_message),
-        chat_id,
-        session_mgr,
-        stats_mgr,
-        openai_client,
-        config,
-    )
-    .await
-    {
-        error!("Failed to retry handling chat message: {}", err);
-    }
+    // TODO: retry action
+    // if let Err(err) = actually_handle_chat_message(
+    //     bot,
+    //     None,
+    //     get_msg_content(&last_message),
+    //     chat_id,
+    //     session_mgr,
+    //     stats_mgr,
+    //     openai_client,
+    //     config,
+    // )
+    // .await
+    // {
+    //     error!("Failed to retry handling chat message: {}", err);
+    // }
 
     true
 }
@@ -194,7 +250,8 @@ async fn handle_show_raw_action(
 async fn actually_handle_chat_message(
     bot: Bot,
     reply_to_msg: Option<Message>,
-    content: String,
+    content: Option<String>,
+    image: Option<String>,
     chat_id: String,
     session_mgr: SessionManager,
     stats_mgr: StatsManager,
@@ -207,10 +264,29 @@ async fn actually_handle_chat_message(
     send_progress_msg.reply_to_message_id = reply_to_msg.as_ref().map(|m| m.id);
     let sent_progress_msg = send_progress_msg.await?;
 
+    let image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg";
+
+    let mut req_content = vec![];
+    if let Some(content) = content {
+        req_content.push(ChatCompletionRequestMessageContentPart::Text(
+            ChatCompletionRequestMessageContentPartText { text: content },
+        ));
+    }
+    if let Some(image) = image {
+        req_content.push(ChatCompletionRequestMessageContentPart::ImageUrl(
+            ChatCompletionRequestMessageContentPartImage {
+                image_url: ImageUrl {
+                    url: image,
+                    detail: Some(ImageDetail::Low),
+                },
+            },
+        ));
+    }
+
     // Construct the request messages.
     let mut msgs = session_mgr.get_history_messages(&chat_id);
     let msg = ChatCompletionRequestUserMessage {
-        content: ChatCompletionRequestUserMessageContent::Text(content),
+        content: ChatCompletionRequestUserMessageContent::Array(req_content.into()),
         name: None,
     };
     let user_msg = ChatCompletionRequestMessage::User(msg);
@@ -441,7 +517,7 @@ impl Module for Chat {
         dptree::entry()
             .branch(
                 Update::filter_message()
-                    .filter_map(|msg: Message| msg.text().map(|text| MessageText(text.to_owned())))
+                    // .filter_map(|msg: Message| msg.text().map(|text| MessageText(text.to_owned())))
                     .map(|msg: Message| msg.chat.id)
                     .branch(dptree::filter_async(handle_chat_message).endpoint(noop_handler)),
             )
