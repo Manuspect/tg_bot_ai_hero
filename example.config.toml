@@ -1,0 +1,44 @@
+authorized_user_ids = [123123123]
+
+# API key of a telegram bot that serves as a user interface with the admin client.
+telegram_bot_token = "some_telegram_bot_token"
+
+check_interval_secs = 600
+skip_initial_send = true
+
+# telegram client credentials.
+tg_api_id = "tg_api_id"
+tg_api_hash = "some_tg_api_hash"
+tg_api_phone = "some_tg_api_phone"
+tg_api_password = "some_tg_api_password"
+
+# the credentials of a trusted telegram user to interact with.
+tg_trusted_user_name = "@user_name"
+
+# the channel name to copy the information from.
+tg_copy_channel_name = "None"
+
+# the channel name to copy  the infromation to.
+tg_paste_channel_name = "None"
+
+admin_usernames = ["user_name"]
+
+openai_api_key = "some_openai_api_key"
+
+openai_api_timeout = 10
+
+database_path = "./data/ai_hero_state.db"
+
+# # local
+# database_url = "postgres://admin:pass_aihero@0.0.0.0:5432/db_aihero"
+
+# # docker
+# database_url = "postgres://admin:pass_aihero@postgres:5432/db_aihero"
+
+stream_throttle_interval = 500
+
+conversation_limit = 20
+
+max_tokens = 4000
+
+renders_markdown = false
