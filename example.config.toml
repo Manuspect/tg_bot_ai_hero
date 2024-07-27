@@ -41,4 +41,4 @@ conversation_limit = 20
 
 max_tokens = 4000
 
-renders_markdown = false
+renders_markdown = true

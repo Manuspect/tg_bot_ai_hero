@@ -50,6 +50,13 @@ impl HistoryMessagePool {
         self.messages.get(id)
     }
 
+    fn last_message(&self) -> Option<&HistoryMessage> {
+        match self.deque.back() {
+            Some(id) => self.messages.get(id),
+            None => None,
+        }
+    }
+
     fn iter(&self) -> impl Iterator<Item = &HistoryMessage> + '_ {
         self.deque.iter().filter_map(|id| self.messages.get(id))
     }
@@ -100,6 +107,12 @@ impl Session {
     pub fn get_history_message(&self, id: i64) -> Option<Message> {
         self.history_messages
             .get_message(&id)
+            .map(|m| m.message.clone())
+    }
+
+    pub fn get_last_message(&self) -> Option<Message> {
+        self.history_messages
+            .last_message()
             .map(|m| m.message.clone())
     }
 

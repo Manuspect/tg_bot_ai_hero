@@ -40,7 +40,6 @@ impl OpenAIClient {
         msgs: Vec<ChatCompletionRequestMessage>,
     ) -> Result<ChatModelStream1, Error> {
         let client = &self.client;
-        info!("{msgs:#?}");
         let req = CreateChatCompletionRequestArgs::default()
             .model("gpt-4o")
             // .temperature(0.6)
@@ -67,35 +66,108 @@ impl OpenAIClient {
     }
 }
 
-pub(crate) fn get_msg_content(msg: &ChatCompletionRequestMessage) -> String {
-    match msg {
-        ChatCompletionRequestMessage::System(msg) => msg.content.clone(),
-        ChatCompletionRequestMessage::User(msg) => match msg.content.clone() {
-            async_openai::types::ChatCompletionRequestUserMessageContent::Text(content) => content,
-            async_openai::types::ChatCompletionRequestUserMessageContent::Array(
-                user_message_content_array,
-            ) => user_message_content_array
-                .into_iter()
-                .map(
-                    |user_message_content_part| match user_message_content_part {
+#[derive(Debug)]
+pub enum MsgContent {
+    Text(String),
+    ContentPart(Vec<async_openai::types::ChatCompletionRequestMessageContentPart>),
+}
+
+impl MsgContent {
+    fn len(self) -> usize {
+        match self {
+            MsgContent::Text(str) => str.len(),
+            MsgContent::ContentPart(content) => {
+                content
+                    .into_iter()
+                    .map(|user_message_content_part| {
+                        match user_message_content_part {
                         async_openai::types::ChatCompletionRequestMessageContentPart::Text(
                             content,
-                        ) => content.text,
+                        ) => content.text.clone(),
                         // TODO: implement image part
                         async_openai::types::ChatCompletionRequestMessageContentPart::ImageUrl(
-                            _,
-                        ) => "{image_here}".to_string(),
-                    },
-                )
-                .reduce(|acc, s| format!("{acc}{s}"))
-                .unwrap_or("".to_string()),
+                            image_url,
+                        ) => format!("{:?}", image_url.image_url.url.clone())
+                    }
+                    })
+                    .reduce(|acc, s| format!("{:?}{:?}", acc, s))
+                    .unwrap_or("".to_string())
+                    .len()
+            }
+        }
+    }
+}
+
+impl ToString for MsgContent {
+    fn to_string(&self) -> String {
+        match self {
+            MsgContent::Text(str) => str.clone(),
+            MsgContent::ContentPart(user_message_content_array) => {
+                user_message_content_array
+                    .into_iter()
+                    .map(|user_message_content_part| {
+                        match user_message_content_part {
+                        async_openai::types::ChatCompletionRequestMessageContentPart::Text(
+                            content,
+                        ) => content.text.clone(),
+                        // TODO: implement image part
+                        async_openai::types::ChatCompletionRequestMessageContentPart::ImageUrl(
+                            image_url,
+                        ) => format!("{:.5}", image_url.image_url.url.clone())
+                    }
+                    })
+                    .reduce(|acc, s| format!("{:?}\n{:?}", acc, s))
+                    .unwrap_or("".to_string())
+            }
+        }
+        .clone()
+    }
+}
+
+// impl std::fmt::Display for MsgContent {
+//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         // let results = get_msg_content(&self.0);
+//         let results = match self {
+//             MsgContent::Text(str) => str,
+//             MsgContent::ContentPart(user_message_content_array) => {
+//                 &user_message_content_array
+//                     .into_iter()
+//                     .map(|user_message_content_part| {
+//                         match user_message_content_part {
+//                         async_openai::types::ChatCompletionRequestMessageContentPart::Text(
+//                             content,
+//                         ) => content.text.clone(),
+//                         // TODO: implement image part
+//                         async_openai::types::ChatCompletionRequestMessageContentPart::ImageUrl(
+//                             image_url,
+//                         ) => format!("{:.20?}", image_url.image_url.url.clone())
+//                     }
+//                     })
+//                     .reduce(|acc, s| format!("{:?}\n{:?}", acc, s))
+//                     .unwrap_or("".to_string())
+//             }
+//         };
+//         write!(f, "\n{}", results)
+//     }
+// }
+
+pub(crate) fn get_msg_content(msg: &ChatCompletionRequestMessage) -> MsgContent {
+    match msg {
+        ChatCompletionRequestMessage::System(msg) => MsgContent::Text(msg.content.clone()),
+        ChatCompletionRequestMessage::User(msg) => match msg.content.clone() {
+            async_openai::types::ChatCompletionRequestUserMessageContent::Text(content) => {
+                MsgContent::Text(content)
+            }
+            async_openai::types::ChatCompletionRequestUserMessageContent::Array(
+                user_message_content_array,
+            ) => MsgContent::ContentPart(user_message_content_array),
         },
         ChatCompletionRequestMessage::Assistant(msg) => {
-            msg.content.clone().unwrap_or("".to_string())
+            MsgContent::Text(msg.content.clone().unwrap_or("".to_string()))
         }
-        ChatCompletionRequestMessage::Tool(msg) => msg.content.clone(),
+        ChatCompletionRequestMessage::Tool(msg) => MsgContent::Text(msg.content.clone()),
         ChatCompletionRequestMessage::Function(msg) => {
-            msg.content.clone().unwrap_or("".to_string())
+            MsgContent::Text(msg.content.clone().unwrap_or("".to_string()))
         }
     }
 }

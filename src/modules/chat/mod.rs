@@ -21,7 +21,7 @@ use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::di::DependencySupplier;
 use teloxide::net::Download;
 use teloxide::prelude::*;
-use teloxide::types::File as TgFile;
+use teloxide::types::{File as TgFile, InputMedia};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Me};
 use tokio::fs::File;
 
@@ -53,30 +53,20 @@ async fn handle_chat_message(
     openai_client: OpenAIClient,
     config: SharedConfig,
 ) -> bool {
-    let mut text = msg.text().map_or(Default::default(), |t| t.to_owned());    
-     
+    let mut text = msg.text().map_or(Default::default(), |t| t.to_owned());
+    let chat_id = chat_id.to_string();
+
+    if text.starts_with('/') {
+        // Let other modules to process the command.
+        return false;
+    }
+
     // Image handling
     let img = msg.photo().map_or(Default::default(), |t| t.to_owned());
-    log::info!("img len: {}", img.len());
     let mut url_image = None;
     if let Some(last_photo) = img.last() {
-        log::info!("Da1");
         match bot.get_file(last_photo.file.id.clone()).send().await {
             Ok(TgFile { meta, path }) => {
-                log::info!("Da2");
-                // let file_r = File::create(format!("./data/images/{}.png", meta.unique_id)).await;
-                // match file_r {
-                //     Ok(mut file) => {
-                //         log::info!("Da3");
-                //         match bot.download_file(&path, &mut file).await {
-                //             Ok(_) => {
-                //                 log::info!("Downloading File: {} | Size: {} ...", path, meta.size)
-                //             }
-                //             Err(err) => log::warn!("{}", err),
-                //         }
-                //     }
-                //     Err(err) => log::warn!("{}", err),
-                // }
                 let mut buffer: Vec<u8> = Vec::new();
                 match bot.download_file(&path, &mut buffer).await {
                     Ok(_) => {
@@ -99,14 +89,6 @@ async fn handle_chat_message(
             }
             Err(err) => log::warn!("{}", err),
         }
-    }
-    log::info!("Da4");
-
-    let chat_id = chat_id.to_string();
-
-    if text.starts_with('/') {
-        // Let other modules to process the command.
-        return false;
     }
 
     let sender_username = msg
@@ -139,11 +121,29 @@ async fn handle_chat_message(
     }
     text = text.trim().to_owned();
 
+    let mut req_content = vec![];
+    req_content.push(ChatCompletionRequestMessageContentPart::Text(
+        ChatCompletionRequestMessageContentPartText { text: text },
+    ));
+    if let Some(url_image) = url_image {
+        req_content.push(ChatCompletionRequestMessageContentPart::ImageUrl(
+            ChatCompletionRequestMessageContentPartImage {
+                image_url: ImageUrl {
+                    url: url_image,
+                    detail: Some(ImageDetail::Low),
+                },
+            },
+        ));
+    }
+    let user_msg = ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+        content: ChatCompletionRequestUserMessageContent::Array(req_content.into()),
+        name: None,
+    });
+
     if let Err(err) = actually_handle_chat_message(
         bot,
         Some(msg),
-        Some(text),
-        url_image,
+        user_msg,
         chat_id,
         session_mgr,
         stats_mgr,
@@ -166,6 +166,7 @@ async fn handle_retry_action(
     openai_client: OpenAIClient,
     config: SharedConfig,
 ) -> bool {
+    log::info!("DA5 {:?}", query.data);
     if !query.data.map(|data| data == "/retry").unwrap_or(false) {
         return false;
     }
@@ -182,29 +183,54 @@ async fn handle_retry_action(
     }
 
     let chat_id = message.chat.id.to_string();
-    let last_message = session_mgr.swap_session_pending_message(chat_id.clone(), None);
+    // let last_message = session_mgr.swap_session_pending_message(chat_id.clone(), None);
+    let last_message =
+        session_mgr.with_mut_session(chat_id.to_string(), |session| session.get_last_message());
     if last_message.is_none() {
         error!("Last message not found");
         return true;
     }
     let last_message = last_message.unwrap();
-    // TODO: retry action
-    // if let Err(err) = actually_handle_chat_message(
-    //     bot,
-    //     None,
-    //     get_msg_content(&last_message),
-    //     chat_id,
-    //     session_mgr,
-    //     stats_mgr,
-    //     openai_client,
-    //     config,
-    // )
-    // .await
-    // {
-    //     error!("Failed to retry handling chat message: {}", err);
-    // }
+    if let Err(err) = actually_handle_chat_message(
+        bot,
+        None,
+        last_message,
+        chat_id,
+        session_mgr,
+        stats_mgr,
+        openai_client,
+        config,
+    )
+    .await
+    {
+        error!("Failed to retry handling chat message: {}", err);
+    }
 
     true
+}
+
+async fn edit_message(
+    user_message_content_part: ChatCompletionRequestMessageContentPart,
+    bot: Bot,
+    message: teloxide::types::Message,
+    chat_id: teloxide::types::ChatId,
+) {
+    match user_message_content_part {
+        async_openai::types::ChatCompletionRequestMessageContentPart::Text(content) => {
+            let _ = bot
+                .edit_message_text(chat_id, message.id, content.text)
+                .await;
+        }
+        // TODO: implement image part
+        async_openai::types::ChatCompletionRequestMessageContentPart::ImageUrl(image_url) => {
+            let t_image = teloxide::types::InputMediaPhoto::new(
+                teloxide::types::InputFile::memory(image_url.image_url.url),
+            );
+            let _ = bot
+                .edit_message_media(chat_id, message.id, InputMedia::Photo(t_image))
+                .await;
+        }
+    }
 }
 
 async fn handle_show_raw_action(
@@ -212,6 +238,7 @@ async fn handle_show_raw_action(
     query: CallbackQuery,
     session_mgr: SessionManager,
 ) -> bool {
+    log::info!("DA6 {:?}", query.data);
     let history_msg_id: Option<i64> = query
         .data
         .as_ref()
@@ -228,16 +255,23 @@ async fn handle_show_raw_action(
     }
     let message = message.unwrap();
     let chat_id = message.chat.id;
-
     let history_message = session_mgr.with_mut_session(chat_id.to_string(), |session| {
         session.get_history_message(history_msg_id)
     });
-
     match history_message {
         Some(history_message) => {
-            let _ = bot
-                .edit_message_text(chat_id, message.id, get_msg_content(&history_message))
-                .await;
+            let msg_content = get_msg_content(&history_message);
+            match msg_content {
+                super::openai::MsgContent::Text(text) => {
+                    let _ = bot.edit_message_text(chat_id, message.id, text).await;
+                }
+                super::openai::MsgContent::ContentPart(content) => {
+                    let future_res = content.into_iter().map(|content| {
+                        edit_message(content, bot.clone(), message.clone(), chat_id.clone())
+                    });
+                    futures::future::join_all(future_res).await;
+                }
+            }
         }
         None => {
             let _ = bot.send_message(chat_id, "The message is stale.").await;
@@ -250,8 +284,7 @@ async fn handle_show_raw_action(
 async fn actually_handle_chat_message(
     bot: Bot,
     reply_to_msg: Option<Message>,
-    content: Option<String>,
-    image: Option<String>,
+    content_msg: ChatCompletionRequestMessage,
     chat_id: String,
     session_mgr: SessionManager,
     stats_mgr: StatsManager,
@@ -264,33 +297,12 @@ async fn actually_handle_chat_message(
     send_progress_msg.reply_to_message_id = reply_to_msg.as_ref().map(|m| m.id);
     let sent_progress_msg = send_progress_msg.await?;
 
-    let image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg";
-
-    let mut req_content = vec![];
-    if let Some(content) = content {
-        req_content.push(ChatCompletionRequestMessageContentPart::Text(
-            ChatCompletionRequestMessageContentPartText { text: content },
-        ));
-    }
-    if let Some(image) = image {
-        req_content.push(ChatCompletionRequestMessageContentPart::ImageUrl(
-            ChatCompletionRequestMessageContentPartImage {
-                image_url: ImageUrl {
-                    url: image,
-                    detail: Some(ImageDetail::Low),
-                },
-            },
-        ));
-    }
-
     // Construct the request messages.
     let mut msgs = session_mgr.get_history_messages(&chat_id);
-    let msg = ChatCompletionRequestUserMessage {
-        content: ChatCompletionRequestUserMessageContent::Array(req_content.into()),
-        name: None,
-    };
-    let user_msg = ChatCompletionRequestMessage::User(msg);
-    msgs.push(user_msg.clone());
+    for x in &msgs {
+        log::info!("{}", get_msg_content(x).to_string());
+    }
+    msgs.push(content_msg.clone());
 
     let result = stream_model_result(
         &bot,
@@ -335,9 +347,11 @@ async fn actually_handle_chat_message(
                         "Show Raw Contents",
                         format!("/show_raw:{}", reply_history_message.id),
                     );
+                    let retry_button = InlineKeyboardButton::callback("Retry", "/retry");
                     edit_message_text.entities = Some(parsed_content.entities);
-                    edit_message_text.reply_markup =
-                        Some(InlineKeyboardMarkup::default().append_row([show_raw_button]));
+                    edit_message_text.reply_markup = Some(
+                        InlineKeyboardMarkup::default().append_row([show_raw_button, retry_button]),
+                    );
                 }
                 if let Err(first_trial_err) = edit_message_text.await {
                     // TODO: test if the error is related to Markdown before
@@ -360,9 +374,12 @@ async fn actually_handle_chat_message(
             }
 
             session_mgr.with_mut_session(chat_id.clone(), |session| {
-                let user_history_msg = session.prepare_history_message(user_msg);
+                let user_history_msg = session.prepare_history_message(content_msg);
                 session.add_history_message(user_history_msg);
                 session.add_history_message(reply_history_message);
+                for x in &session.get_history_messages() {
+                    log::info!("{}", get_msg_content(x).to_string());
+                }
             });
 
             // TODO: maybe we need to handle the case that `reply_to_msg` is `None`.
@@ -382,7 +399,7 @@ async fn actually_handle_chat_message(
         }
         Err(err) => {
             error!("Failed to request the model: {}", err);
-            session_mgr.swap_session_pending_message(chat_id.clone(), Some(user_msg));
+            session_mgr.swap_session_pending_message(chat_id.clone(), Some(content_msg));
             let retry_button = InlineKeyboardButton::callback("Retry", "/retry");
             let reply_markup = InlineKeyboardMarkup::default().append_row([retry_button]);
             bot.edit_message_text(chat_id, sent_progress_msg.id, &config.i18n.api_error_prompt)
@@ -413,7 +430,7 @@ async fn stream_model_result(
     config: &SharedConfig,
 ) -> Result<ChatModelResult, Error> {
     let estimated_prompt_tokens = openai_client.estimate_prompt_tokens(&msgs);
-    log::info!("{:?}", msgs);
+    // log::info!("{:?}", msgs);
     let mut stream = openai_client.request_chat_model(msgs).await?;
     let mut lock = io::stdout();
 
@@ -473,7 +490,6 @@ async fn stream_model_result(
             }
         }
     }
-    info!("{:#?}", response_content.clone());
     if !response_content.is_empty() {
         // TODO: OpenAI currently doesn't support to give the token usage
         // in stream mode. Therefore we need to estimate it locally.

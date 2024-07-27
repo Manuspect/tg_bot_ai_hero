@@ -214,7 +214,7 @@ define_defaults! {
     tg_edit_message_timeout: u64 = 2,
     stream_throttle_interval: u64 = 500,
     conversation_limit: u64 = 20,
-    renders_markdown: bool = false,
+    renders_markdown: bool = true,
 }
 
 define_defaults!(I18nStrings {
