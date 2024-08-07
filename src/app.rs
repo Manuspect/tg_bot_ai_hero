@@ -65,7 +65,7 @@ pub async fn run(config: SharedConfig) {
     module_mgr.register_module(Chat);
     module_mgr.register_module(Parser::new(db_mgr.clone()));
 
-    info!("Initializing bot...");
+    log::info!("Initializing bot...");
     let bot = match init_bot(&config, &mut module_mgr).await {
         Ok(bot) => bot,
         Err(err) => {
@@ -81,6 +81,6 @@ pub async fn run(config: SharedConfig) {
             return;
         }
     };
-    info!("Bot is started!");
+    log::info!("Bot is started!");
     built_dispatcher.dispatch().await;
 }

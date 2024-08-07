@@ -60,7 +60,7 @@ async fn parse_data(bot: Bot, msg: Message, parser_mgr: ParserManager) -> Handle
         )
         .await
         .unwrap();
-        info!("Got a telegram user");
+        log::info!("Got a telegram user");
 
         // Get the "copy from" and "paste to" chats.
         let (copy_chat, _) =
@@ -71,7 +71,7 @@ async fn parse_data(bot: Bot, msg: Message, parser_mgr: ParserManager) -> Handle
         // (It is ok for the program to panic at this stage, as if the error occurs,
         // there is no way to overcome it).
         let copy_chat = copy_chat.unwrap();
-        info!(
+        log::info!(
             "Got a telegram chat: {:#?}, {:#?}",
             copy_chat.name(),
             copy_chat.id()
@@ -191,7 +191,7 @@ impl Module for Parser {
             .await
             .expect("Failed to get a telegram client");
 
-        info!("Got a telegram client");
+        log::info!("Got a telegram client");
         let parser_mgr = ParserManager::with_db_manager(
             self.db_mgr.clone(),
             config.as_ref().clone(),

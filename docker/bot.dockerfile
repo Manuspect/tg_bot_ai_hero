@@ -19,15 +19,16 @@ RUN apt-get update && apt-get install -y \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+
+# Install Diesel
+RUN cargo install diesel_cli
+
 # Set the working directory in the container to /app
 WORKDIR /app
 
 # Copy the rest of your Rust app's source code into the Docker image
 COPY . .
 
-
-# Install Diesel
-RUN cargo install diesel_cli
 
 RUN mkdir -p ./data
 

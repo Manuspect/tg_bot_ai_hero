@@ -91,7 +91,7 @@ async fn start<I: IntoIterator<Item = T>, T: Into<OsString> + Clone>(args: I) {
 
     setup_logging(log::LevelFilter::Info).unwrap();
     let config = SharedRwConfig::new(env_config::read_config());
-    info!("Starting... {config:#?}");
+    log::info!("Starting... {config:#?}");
     if let Some(config) = config.config.write().unwrap().take() {
         let config = SharedConfig::new(config);
         ai_hero::app::run(config).await;

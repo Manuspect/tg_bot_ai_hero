@@ -59,6 +59,9 @@ pub struct Config {
     #[serde(default = "default_tg_edit_message_timeout")]
     pub tg_edit_message_timeout: u64,
 
+    #[serde(default = "default_tg_message_limit")]
+    pub tg_message_limit: usize,
+
     /// A set of usernames that represents the admin users, who can use
     /// admin commands. You must specify this field to use admin features.
     /// JSON key: `adminUsernames`
@@ -212,6 +215,7 @@ macro_rules! define_defaults {
 define_defaults! {
     openai_api_timeout: u64 = 10,
     tg_edit_message_timeout: u64 = 2,
+    tg_message_limit: usize = 4096,
     stream_throttle_interval: u64 = 500,
     conversation_limit: u64 = 20,
     renders_markdown: bool = true,

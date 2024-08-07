@@ -16,12 +16,15 @@ use async_openai::types::{
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, ImageDetail, ImageUrl, Role,
 };
+use async_std::sync::{Mutex, RwLock};
 use base64::Engine;
 use teloxide::dispatching::DpHandlerDescription;
 use teloxide::dptree::di::DependencySupplier;
 use teloxide::net::Download;
 use teloxide::prelude::*;
-use teloxide::types::{File as TgFile, InputMedia};
+use teloxide::types::{
+    ChatAction, File as TgFile, InputMedia, MessageEntity, MessageId, ReplyMarkup,
+};
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Me};
 use tokio::fs::File;
 
@@ -34,6 +37,11 @@ use crate::{
     types::HandlerResult,
 };
 use braille::BrailleProgress;
+
+use async_std::io;
+use async_std::prelude::*;
+use std::time::Instant;
+
 pub(crate) use session::Session;
 pub(crate) use session_mgr::SessionManager;
 
@@ -186,24 +194,24 @@ async fn handle_retry_action(
     // let last_message = session_mgr.swap_session_pending_message(chat_id.clone(), None);
     let last_message =
         session_mgr.with_mut_session(chat_id.to_string(), |session| session.get_last_message());
-    if last_message.is_none() {
+    if let Some(last_message) = last_message {
+        if let Err(err) = actually_handle_chat_message(
+            bot,
+            None,
+            last_message,
+            chat_id,
+            session_mgr,
+            stats_mgr,
+            openai_client,
+            config,
+        )
+        .await
+        {
+            error!("Failed to retry handling chat message: {}", err);
+        }
+    } else {
         error!("Last message not found");
         return true;
-    }
-    let last_message = last_message.unwrap();
-    if let Err(err) = actually_handle_chat_message(
-        bot,
-        None,
-        last_message,
-        chat_id,
-        session_mgr,
-        stats_mgr,
-        openai_client,
-        config,
-    )
-    .await
-    {
-        error!("Failed to retry handling chat message: {}", err);
     }
 
     true
@@ -281,6 +289,143 @@ async fn handle_show_raw_action(
     true
 }
 
+fn split_message_into_chunks(text: &str, limit: usize) -> Vec<String> {
+    text.chars()
+        .collect::<Vec<_>>()
+        .chunks(limit)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect::<Vec<String>>()
+}
+
+struct MarkdownMarkup {
+    reply_history_message_id: i64,
+}
+
+fn prepare_markup(markdown_markup: Option<MarkdownMarkup>) -> InlineKeyboardMarkup {
+    let mut buttons = vec![];
+
+    if let Some(markdown_markup) = markdown_markup {
+        buttons.push(InlineKeyboardButton::callback(
+            "Show Raw Contents",
+            format!("/show_raw:{}", markdown_markup.reply_history_message_id),
+        ));
+    }
+
+    buttons.push(InlineKeyboardButton::callback("Retry", "/retry"));
+    InlineKeyboardMarkup::default().append_row(buttons)
+}
+
+async fn edit_or_send_chunced_message(
+    content: String,
+    limit: usize,
+    bot: Bot,
+    chat_id: String,
+    sent_progress_msg: Arc<Mutex<Message>>,
+    renders_markdown: bool,
+    reply_history_message_id: Option<i64>,
+) -> bool {
+    log::info!("edit_or_send_chunced_message");
+    let texts = split_message_into_chunks(&content, limit);
+    let mut first_message = true;
+    for mut text_chunk in texts {
+        log::info!("text_chunk: {}", text_chunk);
+
+        // fallback if Telegram not allow markdown message
+        let mut need_fallback = false;
+        let fallback_chank = text_chunk.clone();
+
+        // Render markdown logic
+        let mut markdown_markup = None;
+        let mut entities = None;
+        if renders_markdown && reply_history_message_id.is_some() {
+            let parsed_content = markdown::parse(&text_chunk);
+            text_chunk = parsed_content.content.clone();
+            if !parsed_content.entities.is_empty() {
+                if let Some(reply_history_message_id) = reply_history_message_id {
+                    markdown_markup = Some(MarkdownMarkup {
+                        reply_history_message_id,
+                    });
+                }
+            }
+            entities = Some(parsed_content.entities.clone());
+        }
+
+        // TODO: Первое сообщение не всегда верное, и когда оно неверно, необходимо попробовать еще раз отредактировать, а не новое отправлять
+
+        // Edit message if limit for message allow us
+        if first_message {
+            let mut edit_message_text = bot.edit_message_text(
+                chat_id.to_owned(),
+                sent_progress_msg.lock().await.id,
+                text_chunk.clone(),
+            );
+            edit_message_text.entities = entities;
+            edit_message_text.reply_markup = Some(prepare_markup(markdown_markup));
+            if let Err(first_trial_err) = edit_message_text.await {
+                // fallback to raw contents.
+                log::error!(
+                    "failed to edit message (will fallback to raw contents): {}",
+                    first_trial_err
+                );
+                need_fallback = true;
+            }
+        } else {
+            let mut edit_message_text = bot.send_message(chat_id.to_owned(), text_chunk.clone());
+            edit_message_text.entities = entities;
+            edit_message_text.reply_markup = Some(teloxide::types::ReplyMarkup::InlineKeyboard(
+                prepare_markup(markdown_markup),
+            ));
+            match edit_message_text.await {
+                Ok(message) => {
+                    // TODO: новые сообщение нужно трекать и следить, какой кусок текста уже отправлен
+
+                    // let mut w = sent_progress_msg.lock().await;
+                    // *w = message;
+                }
+                Err(first_trial_err) => {
+                    // fallback to raw contents.
+                    log::error!(
+                        "failed to send message (will fallback to raw contents): {}",
+                        first_trial_err
+                    );
+                    need_fallback = true;
+                }
+            };
+        }
+
+        // fallback if Telegram not allow markdown message
+        if need_fallback && renders_markdown {
+            log::info!(
+                "need_fallback && renders_markdown, {}{}",
+                need_fallback,
+                renders_markdown
+            );
+            let mut edit_message_text =
+                bot.send_message(chat_id.to_owned(), fallback_chank.clone());
+            edit_message_text.reply_markup = Some(teloxide::types::ReplyMarkup::InlineKeyboard(
+                prepare_markup(None),
+            ));
+            match edit_message_text.await {
+                Ok(message) => {
+                    // let mut w = sent_progress_msg.lock().await;
+                    // *w = message;
+                }
+                Err(first_trial_err) => {
+                    // fallback to raw contents.
+                    log::error!(
+                        "failed to send raw and markdown message: {}",
+                        first_trial_err
+                    );
+                    return false;
+                }
+            };
+        }
+
+        first_message = false;
+    }
+    return true;
+}
+
 async fn actually_handle_chat_message(
     bot: Bot,
     reply_to_msg: Option<Message>,
@@ -295,19 +440,23 @@ async fn actually_handle_chat_message(
     let progress_bar = BrailleProgress::new(1, 1, 3, Some("Thinking... 🤔".to_owned()));
     let mut send_progress_msg = bot.send_message(chat_id.clone(), progress_bar.current_string());
     send_progress_msg.reply_to_message_id = reply_to_msg.as_ref().map(|m| m.id);
-    let sent_progress_msg = send_progress_msg.await?;
+
+    send_progress_msg.reply_markup = Some(ReplyMarkup::InlineKeyboard(prepare_markup(None)));
+
+    let sent_progress_msg = Arc::new(Mutex::new(send_progress_msg.await?));
+
+    bot.send_chat_action(chat_id.clone(), ChatAction::Typing)
+        .await?;
 
     // Construct the request messages.
     let mut msgs = session_mgr.get_history_messages(&chat_id);
-    for x in &msgs {
-        log::info!("{}", get_msg_content(x).to_string());
-    }
+
     msgs.push(content_msg.clone());
 
     let result = stream_model_result(
         &bot,
         &chat_id,
-        &sent_progress_msg,
+        Arc::clone(&sent_progress_msg),
         progress_bar,
         msgs,
         openai_client,
@@ -328,58 +477,27 @@ async fn actually_handle_chat_message(
                 session.prepare_history_message(ChatCompletionRequestMessage::Assistant(msg))
             });
 
-            let need_fallback = if config.renders_markdown {
-                let parsed_content = markdown::parse(&res.content);
-                #[cfg(debug_assertions)]
-                {
-                    debug!(
-                        "rendered Markdown contents: {}\ninto: {:#?}",
-                        res.content, parsed_content
-                    );
-                }
-                let mut edit_message_text = bot.edit_message_text(
-                    chat_id.to_owned(),
-                    sent_progress_msg.id,
-                    parsed_content.content,
-                );
-                if !parsed_content.entities.is_empty() {
-                    let show_raw_button = InlineKeyboardButton::callback(
-                        "Show Raw Contents",
-                        format!("/show_raw:{}", reply_history_message.id),
-                    );
-                    let retry_button = InlineKeyboardButton::callback("Retry", "/retry");
-                    edit_message_text.entities = Some(parsed_content.entities);
-                    edit_message_text.reply_markup = Some(
-                        InlineKeyboardMarkup::default().append_row([show_raw_button, retry_button]),
-                    );
-                }
-                if let Err(first_trial_err) = edit_message_text.await {
-                    // TODO: test if the error is related to Markdown before
-                    // fallback to raw contents.
-                    error!(
-                        "failed to send message (will fallback to raw contents): {}",
-                        first_trial_err
-                    );
-                    true
-                } else {
-                    false
-                }
-            } else {
-                true
-            };
-
-            if need_fallback {
-                bot.edit_message_text(chat_id.to_owned(), sent_progress_msg.id, &res.content)
-                    .await?;
+            if !edit_or_send_chunced_message(
+                res.content.clone(),
+                config.tg_message_limit,
+                bot.clone(),
+                chat_id.to_owned(),
+                sent_progress_msg,
+                config.renders_markdown,
+                Some(reply_history_message.id),
+            )
+            .await
+            {
+                log::error!("Failed to edit the progress message");
             }
 
             session_mgr.with_mut_session(chat_id.clone(), |session| {
                 let user_history_msg = session.prepare_history_message(content_msg);
                 session.add_history_message(user_history_msg);
                 session.add_history_message(reply_history_message);
-                for x in &session.get_history_messages() {
-                    log::info!("{}", get_msg_content(x).to_string());
-                }
+                // for x in &session.get_history_messages() {
+                //     log::info!("get_msg_content {}", get_msg_content(x).to_string());
+                // }
             });
 
             // TODO: maybe we need to handle the case that `reply_to_msg` is `None`.
@@ -402,10 +520,14 @@ async fn actually_handle_chat_message(
             session_mgr.swap_session_pending_message(chat_id.clone(), Some(content_msg));
             let retry_button = InlineKeyboardButton::callback("Retry", "/retry");
             let reply_markup = InlineKeyboardMarkup::default().append_row([retry_button]);
-            bot.edit_message_text(chat_id, sent_progress_msg.id, &config.i18n.api_error_prompt)
-                .reply_markup(reply_markup)
-                .await
-                .map(|_| ())
+            bot.edit_message_text(
+                chat_id,
+                sent_progress_msg.lock().await.id,
+                &config.i18n.api_error_prompt,
+            )
+            .reply_markup(reply_markup)
+            .await
+            .map(|_| ())
         }
     };
 
@@ -416,14 +538,10 @@ async fn actually_handle_chat_message(
     Ok(())
 }
 
-use async_std::io;
-use async_std::prelude::*;
-use std::time::Instant;
-
 async fn stream_model_result(
     bot: &Bot,
     chat_id: &str,
-    editing_msg: &Message,
+    editing_msg: Arc<Mutex<Message>>,
     mut progress_bar: BrailleProgress,
     msgs: Vec<ChatCompletionRequestMessage>,
     openai_client: OpenAIClient,
@@ -437,6 +555,10 @@ async fn stream_model_result(
     let mut timeout_times = 0;
     let mut antispam_start_time = Instant::now();
     let mut response_content = String::new();
+
+    lock.write("INFO [ai_hero::modules::chat] /start_stdout: ".as_bytes())
+        .await?;
+
     loop {
         tokio::select! {
             res = stream.next() => {
@@ -453,16 +575,20 @@ async fn stream_model_result(
                                 }
                                 let elapsed_time = antispam_start_time.elapsed();
                                 if elapsed_time >= Duration::from_secs(config.tg_edit_message_timeout) {
+                                    bot.send_chat_action(chat_id.to_owned(), ChatAction::Typing).await?;
                                     progress_bar.advance_progress();
 
                                     let updated_text = format!("{}\n{}", response_content, progress_bar.current_string());
-                                    let res = bot
-                                        .edit_message_text(chat_id.to_owned(), editing_msg.id, updated_text)
-                                        .await;
+                                    let mut edit_message_text = bot
+                                        .edit_message_text(chat_id.to_owned(), editing_msg.lock().await.id, updated_text);
+                                    edit_message_text.reply_markup = Some(prepare_markup(None));
+                                    let res = edit_message_text.await;
+
+
                                     match res {
                                         Ok(_) => {},
                                         Err(res) => {
-                                            error!("Failed to edit the progress message: {}", res);
+                                            log::error!("Failed to edit the progress message: {}", res);
                                         }
                                     };
 
@@ -490,6 +616,10 @@ async fn stream_model_result(
             }
         }
     }
+
+    lock.write("\n/end_stdout\n".as_bytes()).await?;
+    lock.flush().await?;
+
     if !response_content.is_empty() {
         // TODO: OpenAI currently doesn't support to give the token usage
         // in stream mode. Therefore we need to estimate it locally.

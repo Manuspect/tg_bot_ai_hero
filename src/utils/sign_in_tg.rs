@@ -53,7 +53,7 @@ impl SignInTg {
         while !client.is_authorized().await? {
             // Authorize in telegram.
 
-            info!("A user is not authorized, trying to log in...");
+            log::info!("A user is not authorized, trying to log in...");
 
             // Request a verification code and prompt user to enter it.
             let token = client.request_login_code(tg_api_phone.as_str()).await?;
@@ -86,7 +86,7 @@ impl SignInTg {
                 // There is a Two-Factor verification to pass.
                 // Use Two-Factor verification password.
                 Err(SignInError::PasswordRequired(password_token)) => {
-                    info!("2FA required...");
+                    log::info!("2FA required...");
 
                     client
                         .check_password(password_token, tg_api_password.as_bytes())
@@ -118,7 +118,7 @@ impl SignInTg {
             // messages.
             client.session().save_to_file(SESSION_FILE)?;
 
-            info!("Session is saved to file");
+            log::info!("Session is saved to file");
         } // end while
 
         // The program has been already authorized.
@@ -130,7 +130,7 @@ impl SignInTg {
             .send()
             .await?;
 
-        info!("Logged in!");
+        log::info!("Logged in!");
 
         Ok(user)
     } // end fn get_user_from_client

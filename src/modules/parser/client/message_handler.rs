@@ -49,7 +49,7 @@ impl ClientService {
             tg_client.iter_messages(copy_chat)
         };
 
-        info!(
+        log::info!(
             "Chat {} has {} total messages.",
             copy_chat.name(),
             messages.total().await.unwrap()
@@ -229,7 +229,7 @@ impl ClientService {
                 }, // end Ok
                 Err(error) => return Err(AppError::new(error.to_string())),
             }; // end match
-            info!("edit message_id: {}", message.id().to_string(),);
+            log::info!("edit message_id: {}", message.id().to_string(),);
 
             // TODO: edit saved message
             ClientService::update_chat_storage(message, &input_message).await?;
@@ -254,7 +254,7 @@ impl ClientService {
             {
                 Ok(paste_channel_message_id) => match paste_channel_message_id {
                     Some(_) => {
-                        info!("message_id: {} already exists", message.id().to_string(),);
+                        log::info!("message_id: {} already exists", message.id().to_string(),);
                         return Ok(());
                     }
                     None => {
@@ -267,7 +267,7 @@ impl ClientService {
             let mut not_found_counter = not_found_counter.lock().await;
             *not_found_counter += 1;
 
-            info!(
+            log::info!(
                 "message_id: {},  not_found_counter: {}",
                 message.id().to_string(),
                 not_found_counter,
@@ -300,7 +300,7 @@ impl ClientService {
         message: &Message,
         input_message: &Map<String, Value>,
     ) -> Result<(), AppError> {
-        info!("update_chat_storage{:?}", input_message);
+        log::info!("update_chat_storage{:?}", input_message);
         let media_path = input_message.get("media_path");
         // Check if the media path is not None and the media should be
         // included into the redirected message.

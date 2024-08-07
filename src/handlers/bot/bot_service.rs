@@ -89,7 +89,7 @@ pub async fn get_trusted_chat_id(tg_client: &Client, config: env_config::SharedR
             //     })
             // };
 
-            info!("Wait for trusted_user_id");
+            log::info!("Wait for trusted_user_id");
             // Wait for a user that enter correct service password.
             let chat_id: i64 = rx_telegram_trusted_user_id.recv().await.unwrap();
             {
@@ -103,12 +103,12 @@ pub async fn get_trusted_chat_id(tg_client: &Client, config: env_config::SharedR
                 //     // std::process::exit(0);
                 // });
             }
-            info!("Wait for shutdown of bot_for_trusted_id");
+            log::info!("Wait for shutdown of bot_for_trusted_id");
 
             if let Err(err) = tokio::try_join!(bot_handle) {
                 panic!("{err}")
             }
-            info!("Bot_for_trusted_id shutdown");
+            log::info!("Bot_for_trusted_id shutdown");
             chat_id
         }
     }
