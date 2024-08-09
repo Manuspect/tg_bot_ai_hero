@@ -10,6 +10,13 @@ services:
       - ./data:/app/data
     depends_on:
       - postgres
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 100m
+        max-file: "3"
+        labels: "production_status"
+        env: "os"
 
   postgres:
     build:
@@ -22,6 +29,13 @@ services:
       - ai-hero-postgres-data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 100m
+        max-file: "3"
+        labels: "production_status"
+        env: "os"
 
 volumes:
   ai-hero-postgres-data:
