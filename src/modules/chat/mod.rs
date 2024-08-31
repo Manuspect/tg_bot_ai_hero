@@ -63,17 +63,20 @@ fn extract_text_from_document(buffer: &[u8], file_name: &str) -> Option<String> 
         name if name.ends_with(".pdf") => extract_text_from_pdf(buffer),
         name if name.ends_with(".docx") => extract_text_from_docx(buffer),
         name if name.ends_with(".txt") => Some(String::from_utf8_lossy(buffer).to_string()),
-        _ => None,
+        _ => {
+            log::warn!("Unsupported file format: {}", file_name);
+            None
+        }
     }
 }
 
 fn extract_text_from_pdf(buffer: &[u8]) -> Option<String> {
-    let result = extract_text_from_mem(buffer);
-    if result.is_ok() {
-        return Some(result.unwrap());
-    } else {
-        info!("{}", result.unwrap_err());
-        return None;
+    match extract_text_from_mem(buffer) {
+        Ok(text) => Some(text),
+        Err(err) => {
+            log::warn!("Failed to extract text from PDF: {}", err);
+            None
+        }
     }
 }
 
@@ -97,25 +100,26 @@ fn extract_text_from_docx(buffer: &[u8]) -> Option<String> {
     let mut buf = Vec::new();
 
     loop {
-        let event = reader.read_event_into(&mut buf);
-        if event.is_ok() {
-            let e = event.unwrap();
-            if let Event::Text(e) = e {
-                text.push_str(&e.unescape().unwrap_or_default().trim());
-            } else if let Event::Eof = e {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Text(e)) => {
+                if let Ok(unescaped) = e.unescape() {
+                    text.push_str(unescaped.trim());
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(err) => {
+                log::warn!("Error reading XML event: {}", err);
                 break;
             }
-        } else {
-            info!("{}", event.unwrap_err());
-            break;
         }
         buf.clear();
     }
 
     if text.is_empty() {
-        return None;
+        None
     } else {
-        return Some(text);
+        Some(text)
     }
 }
 
