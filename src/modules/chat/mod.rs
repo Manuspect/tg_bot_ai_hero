@@ -48,6 +48,7 @@ use quick_xml::Reader;
 use std::io::Cursor;
 use std::io::Read;
 use zip::ZipArchive;
+use teloxide::types::ParseMode;
 
 pub(crate) use session::Session;
 pub(crate) use session_mgr::SessionManager;
@@ -140,6 +141,32 @@ async fn handle_chat_message(
     if text.starts_with('/') {
         // Let other modules to process the command.
         return false;
+    }
+
+    // Audio handlig
+    if let Some(audio) = msg.audio() {
+        let file_id = audio.file.id.clone();
+        match bot.get_file(file_id).send().await {
+            Ok(file) => {
+                let file_name = audio.file_name.clone().unwrap_or_else(|| "unknown".to_string());
+                let file_size = audio.file.size;
+                let duration = audio.duration;
+                let format = file_name.split('.').last().unwrap_or("unknown").to_string();
+    
+                let response_text = format!(
+                    "Название файла: {}\nРазмер: {} bytes\nДлительность: {} seconds\nФормат файла: {}",
+                    file_name, file_size, duration, format
+                );
+                
+
+               let chat_id = chat_id.to_string();
+               let chat_id_clone = chat_id.clone();
+               bot.send_message(chat_id_clone, response_text)
+               .parse_mode(ParseMode::Html)
+               .await;
+            }
+            Err(err) => log::warn!("{}", err),
+        }
     }
 
     // Documents handling
