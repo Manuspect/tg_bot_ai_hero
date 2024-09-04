@@ -42,6 +42,14 @@ use async_std::io;
 use async_std::prelude::*;
 use std::time::Instant;
 
+use pdf_extract::extract_text_from_mem;
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use std::io::Cursor;
+use std::io::Read;
+use zip::ZipArchive;
+use teloxide::types::ParseMode;
+
 pub(crate) use session::Session;
 pub(crate) use session_mgr::SessionManager;
 
@@ -49,6 +57,72 @@ use super::openai::get_msg_content;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MessageText(String);
+
+// TODO: Fix the issue where the bot only sees text from a file/image but doesn't see text from the message
+fn extract_text_from_document(buffer: &[u8], file_name: &str) -> Option<String> {
+    match file_name {
+        name if name.ends_with(".pdf") => extract_text_from_pdf(buffer),
+        name if name.ends_with(".docx") => extract_text_from_docx(buffer),
+        name if name.ends_with(".txt") => Some(String::from_utf8_lossy(buffer).to_string()),
+        _ => {
+            log::warn!("Unsupported file format: {}", file_name);
+            None
+        }
+    }
+}
+
+fn extract_text_from_pdf(buffer: &[u8]) -> Option<String> {
+    match extract_text_from_mem(buffer) {
+        Ok(text) => Some(text),
+        Err(err) => {
+            log::warn!("Failed to extract text from PDF: {}", err);
+            None
+        }
+    }
+}
+
+fn extract_text_from_docx(buffer: &[u8]) -> Option<String> {
+    let cursor = Cursor::new(buffer);
+    let mut zip = ZipArchive::new(cursor).ok()?;
+    let mut document_xml = String::new();
+
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i).ok()?;
+        if file.name().ends_with("word/document.xml") {
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer).ok()?;
+            document_xml = String::from_utf8_lossy(&buffer).to_string();
+            break;
+        }
+    }
+
+    let mut text = String::new();
+    let mut reader = Reader::from_str(&document_xml);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Text(e)) => {
+                if let Ok(unescaped) = e.unescape() {
+                    text.push_str(unescaped.trim());
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(err) => {
+                log::warn!("Error reading XML event: {}", err);
+                break;
+            }
+        }
+        buf.clear();
+    }
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
 
 async fn handle_chat_message(
     bot: Bot,
@@ -67,6 +141,52 @@ async fn handle_chat_message(
     if text.starts_with('/') {
         // Let other modules to process the command.
         return false;
+    }
+
+    // Audio handlig
+    if let Some(audio) = msg.audio() {
+        let file_id = audio.file.id.clone();
+        match bot.get_file(file_id).send().await {
+            Ok(file) => {
+                let file_name = audio.file_name.clone().unwrap_or_else(|| "unknown".to_string());
+                let file_size = audio.file.size;
+                let duration = audio.duration;
+                let format = file_name.split('.').last().unwrap_or("unknown").to_string();
+    
+                let response_text = format!(
+                    "Название файла: {}\nРазмер: {} bytes\nДлительность: {} seconds\nФормат файла: {}",
+                    file_name, file_size, duration, format
+                );
+                
+
+               let chat_id = chat_id.to_string();
+               let chat_id_clone = chat_id.clone();
+               bot.send_message(chat_id_clone, response_text)
+               .parse_mode(ParseMode::Html)
+               .await;
+            }
+            Err(err) => log::warn!("{}", err),
+        }
+    }
+
+    // Documents handling
+    if let Some(document) = msg.document() {
+        match bot.get_file(document.file.id.clone()).send().await {
+            Ok(file) => {
+                let mut buffer: Vec<u8> = Vec::new();
+                match bot.download_file(&file.path, &mut buffer).await {
+                    Ok(_) => {
+                        text = extract_text_from_document(
+                            &buffer,
+                            document.file_name.as_deref().unwrap_or_default(),
+                        )
+                        .unwrap_or_default();
+                    }
+                    Err(err) => log::warn!("{}", err),
+                }
+            }
+            Err(err) => log::warn!("{}", err),
+        }
     }
 
     // Image handling
